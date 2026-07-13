@@ -1,0 +1,41 @@
+name: Build and Deploy Rust to Vultr
+
+# Сценарий будет запускаться автоматически при каждом push в ветку ai-feature
+on:
+  push:
+    branches: [ ai-feature ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Скачиваем актуальный код из репозитория на сервера GitHub
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 2. Устанавливаем Rust на сервере GitHub
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    # 3. Кэшируем зависимости Cargo, чтобы сборка с каждым разом шла быстрее
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "rust-backend -> target"
+
+    # 4. Собираем бинарник под Linux (здесь сервера GitHub жарят на полную мощность!)
+    - name: Build Release Binary
+      run: |
+        cd rust-backend
+        cargo build --release
+
+    # 5. Перекидываем готовый скомпилированный файл на твой сервер Vultr
+    - name: Deploy to Vultr via SCP
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: root
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        source: "rust-backend/target/release/pulsebook"
+        target: "/root/trading-strategy-improvement/"
