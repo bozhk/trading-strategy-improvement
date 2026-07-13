@@ -65,14 +65,35 @@ async fn snapshot() -> Json<Value> {
     Json(STATE.lock().snapshot())
 }
 
+fn supplied_admin_password(headers: &HeaderMap) -> Option<&str> {
+    if let Some(password) = headers
+        .get("x-admin-password")
+        .and_then(|value| value.to_str().ok())
+    {
+        return Some(password.trim());
+    }
+
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .and_then(|authorization| {
+            authorization
+                .strip_prefix("Bearer ")
+                .or_else(|| authorization.strip_prefix("bearer "))
+                .or(Some(authorization))
+        })
+        .map(str::trim)
+}
+
 fn admin_authorized(headers: &HeaderMap) -> bool {
     let Some(expected) = admin_password() else {
         return false;
     };
-    let supplied = headers
-        .get("x-admin-password")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
+    let Some(supplied) = supplied_admin_password(headers) else {
+        return false;
+    };
+    let expected = expected.trim();
     if supplied.len() != expected.len() {
         return false;
     }
@@ -272,7 +293,31 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS};
+    use super::{supplied_admin_password, DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS};
+    use axum::http::{header, HeaderMap, HeaderValue};
+
+    #[test]
+    fn accepts_supported_admin_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-admin-password",
+            HeaderValue::from_static("secret-password"),
+        );
+        assert_eq!(supplied_admin_password(&headers), Some("secret-password"));
+
+        headers.remove("x-admin-password");
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-password"),
+        );
+        assert_eq!(supplied_admin_password(&headers), Some("secret-password"));
+
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("secret-password"),
+        );
+        assert_eq!(supplied_admin_password(&headers), Some("secret-password"));
+    }
 
     #[test]
     fn dashboard_assets_are_embedded() {
