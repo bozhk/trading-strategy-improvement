@@ -9,37 +9,39 @@ mod scanner;
 mod state;
 mod stream;
 
-use axum::{response::Html, routing::get, Json, Router};
+use axum::{
+    http::{header, HeaderValue},
+    response::{Html, IntoResponse},
+    routing::get,
+    Json, Router,
+};
 use config::SETTINGS;
 use detail::build_symbol_detail;
 use serde_json::{json, Value};
 use socketioxide::extract::{AckSender, Data, SocketRef};
 use socketioxide::SocketIo;
 use state::STATE;
-use std::path::PathBuf;
 use std::time::Duration;
-use tower_http::services::ServeDir;
 
-fn assets_root() -> PathBuf {
-    // Shares the exact same dashboard as the Python backend.
-    for candidate in ["../backend", "backend", "."] {
-        let path = PathBuf::from(candidate);
-        if path.join("templates/index.html").exists() {
-            return path;
-        }
-    }
-    PathBuf::from("../backend")
+const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
+const DASHBOARD_CSS: &str = include_str!("../dashboard/app.css");
+const DASHBOARD_JS: &str = include_str!("../dashboard/app.js");
+
+async fn index() -> Html<&'static str> {
+    Html(DASHBOARD_HTML)
 }
 
-async fn index() -> Html<String> {
-    let template = tokio::fs::read_to_string(assets_root().join("templates/index.html"))
-        .await
-        .unwrap_or_else(|_| "<h1>dashboard template missing</h1>".to_string());
-    // Substitute the two Flask url_for expressions with static paths.
-    Html(
-        template
-            .replace("{{ url_for('static', filename='app.css') }}", "/static/app.css")
-            .replace("{{ url_for('static', filename='app.js') }}", "/static/app.js"),
+async fn dashboard_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, HeaderValue::from_static("text/css; charset=utf-8"))],
+        DASHBOARD_CSS,
+    )
+}
+
+async fn dashboard_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, HeaderValue::from_static("text/javascript; charset=utf-8"))],
+        DASHBOARD_JS,
     )
 }
 
@@ -163,13 +165,29 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/static/app.css", get(dashboard_css))
+        .route("/static/app.js", get(dashboard_js))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
-        .nest_service("/static", ServeDir::new(assets_root().join("static")))
         .layer(socketio_layer);
 
     let address = format!("{}:{}", SETTINGS.host, SETTINGS.port);
     println!("PulseBook (rust) listening on http://{address} · mode={} · LIVE TRADING LOCKED", SETTINGS.trading_mode);
     let listener = tokio::net::TcpListener::bind(&address).await.expect("bind server port");
     axum::serve(listener, app).await.expect("server crashed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS};
+
+    #[test]
+    fn dashboard_assets_are_embedded() {
+        assert!(DASHBOARD_HTML.contains("PulseBook"));
+        assert!(DASHBOARD_HTML.contains("/static/app.css"));
+        assert!(DASHBOARD_HTML.contains("/static/app.js"));
+        assert!(DASHBOARD_CSS.contains(":root"));
+        assert!(DASHBOARD_JS.contains("/api/snapshot"));
+        assert!(!DASHBOARD_HTML.contains("dashboard template missing"));
+    }
 }
