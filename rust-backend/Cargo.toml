@@ -1,0 +1,26 @@
+[package]
+name = "pulsebook"
+version = "1.0.0"
+edition = "2021"
+description = "Order-flow paper trading engine (Rust port of the Python simulator)"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+socketioxide = "0.18"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+futures-util = "0.3"
+parking_lot = "0.12"
+ordered-float = "5"
+rand = { version = "0.9", features = ["small_rng"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
