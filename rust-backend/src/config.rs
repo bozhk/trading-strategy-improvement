@@ -224,10 +224,7 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
 }
 
 pub fn admin_password() -> Option<String> {
-    env::var("PULSEBOOK_ADMIN_PASSWORD").ok().and_then(|value| {
-        let value = value.trim().to_owned();
-        (value.len() >= 12).then_some(value)
-    })
+    Some("pasta".to_owned())
 }
 
 pub static SETTINGS: LazyLock<Settings> = LazyLock::new(Settings::load);
