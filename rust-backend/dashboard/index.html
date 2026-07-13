@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b0d0f">
+  <meta name="description" content="PulseBook order-flow engine operations dashboard">
+  <title>PulseBook // Operations</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to dashboard</a>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">PB</span><div><strong>PulseBook</strong><span>Order-flow engine</span></div></div>
+    <div class="system-state"><span id="status-dot" class="status-dot" aria-hidden="true"></span><span id="connection-label">Connecting</span><span class="divider" aria-hidden="true"></span><span id="clock">--:--:-- UTC</span></div>
+  </header>
+
+  <main id="main" class="shell">
+    <section class="intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">SYSTEM / LIVE TELEMETRY</p><h1 id="page-title">Market intelligence,<br><span>without the noise.</span></h1></div>
+      <div class="intro-meta"><p>Monitors absorption, breakout and retest signals across the active universe. Execution is locked to safe modes.</p><div class="meta-row"><span>ENGINE <b>RUST</b></span><span>MODE <b id="mode">PAPER</b></span><span>SESSION <b id="session">—</b></span></div></div>
+    </section>
+
+    <section class="metrics" aria-label="Performance summary">
+      <article><span>Total P&amp;L</span><strong id="pnl">$0.00</strong><small id="pnl-note">Realized $0.00</small></article>
+      <article><span>Win rate</span><strong id="win-rate">0.0%</strong><small id="record">0W / 0L</small></article>
+      <article><span>Profit factor</span><strong id="profit-factor">0.00</strong><small id="trades">0 closed trades</small></article>
+      <article><span>Open risk</span><strong id="open-count">0</strong><small id="uptime">Uptime 00:00:00</small></article>
+    </section>
+
+    <div id="error-banner" class="error-banner" role="alert" hidden>Telemetry unavailable. Retrying automatically.</div>
+
+    <section class="workspace">
+      <div class="primary-column">
+        <section class="panel radar-panel" aria-labelledby="radar-title">
+          <div class="panel-head"><div><p class="eyebrow">ACTIVE UNIVERSE</p><h2 id="radar-title">Market radar</h2></div><span id="source-badge" class="badge">SOURCE —</span></div>
+          <div class="table-wrap"><table><thead><tr><th>Instrument</th><th>Price</th><th>Spread</th><th>Flow</th><th>Signal</th></tr></thead><tbody id="radar-body"><tr><td colspan="5" class="empty">Waiting for market data…</td></tr></tbody></table></div>
+        </section>
+
+        <section class="panel" aria-labelledby="positions-title">
+          <div class="panel-head"><div><p class="eyebrow">EXECUTION</p><h2 id="positions-title">Open positions</h2></div><span id="position-count" class="counter">00</span></div>
+          <div id="positions" class="stack"><div class="empty-block">No open positions. The engine is scanning for qualified setups.</div></div>
+        </section>
+      </div>
+
+      <aside class="panel activity" aria-labelledby="activity-title">
+        <div class="panel-head"><div><p class="eyebrow">EVENT STREAM</p><h2 id="activity-title">Engine activity</h2></div><span id="event-count" class="counter">00</span></div>
+        <div id="logs" class="timeline" aria-live="polite"><div class="empty-block">Waiting for engine events…</div></div>
+      </aside>
+    </section>
+
+    <section class="panel trades-panel" aria-labelledby="trades-title">
+      <div class="panel-head"><div><p class="eyebrow">HISTORY</p><h2 id="trades-title">Recent closed trades</h2></div><span id="last-update">Not synced</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Closed</th><th>Instrument</th><th>Side</th><th>Entry → Exit</th><th>Result</th><th>Reason</th></tr></thead><tbody id="trades-body"><tr><td colspan="6" class="empty">No closed trades in this session.</td></tr></tbody></table></div>
+    </section>
+  </main>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
