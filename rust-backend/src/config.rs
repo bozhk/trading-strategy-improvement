@@ -1,4 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs;
+use std::path::Path;
 use std::sync::LazyLock;
 
 fn env_str(name: &str, default: &str) -> String {
@@ -6,11 +9,17 @@ fn env_str(name: &str, default: &str) -> String {
 }
 
 fn env_f64(name: &str, default: f64) -> f64 {
-    env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
-    env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 fn env_bool(name: &str, default: bool) -> bool {
@@ -19,7 +28,8 @@ fn env_bool(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub rest_url: String,
     pub ws_url: String,
@@ -70,11 +80,17 @@ pub struct Settings {
     pub min_live_profit_factor: f64,
     pub min_live_expectancy: f64,
     pub max_live_drawdown_pct: f64,
-    pub demo_symbols: Vec<&'static str>,
+    pub demo_symbols: Vec<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self::defaults()
+    }
 }
 
 impl Settings {
-    fn new() -> Self {
+    fn defaults() -> Self {
         Self {
             rest_url: "https://api.bybit.com".into(),
             ws_url: "wss://stream.bybit.com/v5/public/linear".into(),
@@ -117,11 +133,68 @@ impl Settings {
             min_live_profit_factor: 1.20,
             min_live_expectancy: 0.0,
             max_live_drawdown_pct: 0.10,
-            demo_symbols: vec![
-                "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT",
-                "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "SUIUSDT",
-            ],
+            demo_symbols: [
+                "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT",
+                "SUIUSDT",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         }
+    }
+
+    pub fn load() -> Self {
+        let defaults = Self::defaults();
+        let path = config_path();
+        let settings = match fs::read_to_string(&path) {
+            Ok(raw) => serde_json::from_str::<Self>(&raw).unwrap_or_else(|error| {
+                eprintln!(
+                    "Invalid settings file {}: {error}. Environment defaults are used.",
+                    path.display()
+                );
+                defaults
+            }),
+            Err(_) => defaults,
+        };
+        settings
+            .validate()
+            .unwrap_or_else(|error| panic!("Invalid settings: {error}"));
+        settings
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        self.assert_safe_mode();
+        if !(5..=500).contains(&self.max_symbols) {
+            return Err("max_symbols must be from 5 to 500".into());
+        }
+        if !(30..=86_400).contains(&self.scan_interval) {
+            return Err("scan_interval must be from 30 to 86400 seconds".into());
+        }
+        if self.min_turnover < 0.0 || self.min_price < 0.0 {
+            return Err("market filters cannot be negative".into());
+        }
+        if !(0.001..=5.0).contains(&self.max_spread_pct) {
+            return Err("max_spread_pct must be from 0.001 to 5".into());
+        }
+        if !(1..=100).contains(&self.ws_chunk_size) {
+            return Err("ws_chunk_size must be from 1 to 100".into());
+        }
+        if !(0.0..=0.05).contains(&self.risk_per_trade_pct) {
+            return Err("risk_per_trade_pct must be from 0 to 0.05".into());
+        }
+        if self.account_equity <= 0.0 || self.max_position_notional <= 0.0 {
+            return Err("equity and position limit must be positive".into());
+        }
+        if !(1..=50).contains(&self.max_open_positions) {
+            return Err("max_open_positions must be from 1 to 50".into());
+        }
+        if self.taker_fee_pct < 0.0 || self.slippage_pct < 0.0 {
+            return Err("execution costs cannot be negative".into());
+        }
+        if self.min_stop_pct <= 0.0 || self.max_stop_pct < self.min_stop_pct {
+            return Err("invalid stop range".into());
+        }
+        Ok(())
     }
 
     /// Live trading is hard-locked: the binary refuses to start in any
@@ -133,8 +206,27 @@ impl Settings {
     }
 }
 
-pub static SETTINGS: LazyLock<Settings> = LazyLock::new(|| {
-    let settings = Settings::new();
-    settings.assert_safe_mode();
-    settings
-});
+pub fn config_path() -> std::path::PathBuf {
+    env::var("PULSEBOOK_CONFIG")
+        .map(Into::into)
+        .unwrap_or_else(|_| "pulsebook-settings.json".into())
+}
+
+pub fn save_settings(settings: &Settings) -> Result<(), String> {
+    settings.validate()?;
+    let path = config_path();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|e| format!("cannot create config directory: {e}"))?;
+    let temporary = path.with_extension("json.tmp");
+    let data = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(&temporary, data).map_err(|e| format!("cannot write config: {e}"))?;
+    fs::rename(&temporary, &path).map_err(|e| format!("cannot replace config: {e}"))
+}
+
+pub fn admin_password() -> Option<String> {
+    env::var("PULSEBOOK_ADMIN_PASSWORD")
+        .ok()
+        .filter(|value| value.len() >= 12)
+}
+
+pub static SETTINGS: LazyLock<Settings> = LazyLock::new(Settings::load);

@@ -10,12 +10,12 @@ mod state;
 mod stream;
 
 use axum::{
-    http::{header, HeaderValue},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
-use config::SETTINGS;
+use config::{admin_password, save_settings, Settings, SETTINGS};
 use detail::build_symbol_detail;
 use serde_json::{json, Value};
 use socketioxide::extract::{AckSender, Data, SocketRef};
@@ -33,14 +33,20 @@ async fn index() -> Html<&'static str> {
 
 async fn dashboard_css() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("text/css; charset=utf-8"))],
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/css; charset=utf-8"),
+        )],
         DASHBOARD_CSS,
     )
 }
 
 async fn dashboard_js() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("text/javascript; charset=utf-8"))],
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/javascript; charset=utf-8"),
+        )],
         DASHBOARD_JS,
     )
 }
@@ -57,6 +63,81 @@ async fn health() -> Json<Value> {
 
 async fn snapshot() -> Json<Value> {
     Json(STATE.lock().snapshot())
+}
+
+fn admin_authorized(headers: &HeaderMap) -> bool {
+    let Some(expected) = admin_password() else {
+        return false;
+    };
+    let supplied = headers
+        .get("x-admin-password")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if supplied.len() != expected.len() {
+        return false;
+    }
+    supplied
+        .bytes()
+        .zip(expected.bytes())
+        .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+        == 0
+}
+
+async fn settings_status() -> Json<Value> {
+    Json(json!({
+        "configured": admin_password().is_some(),
+        "mode": SETTINGS.trading_mode,
+        "source": STATE.lock().source,
+        "active_symbols": STATE.lock().books.len(),
+        "selected_symbols": STATE.lock().radar.len(),
+        "max_symbols": SETTINGS.max_symbols,
+        "config_path": config::config_path().display().to_string(),
+        "live_trading_locked": true
+    }))
+}
+
+async fn get_settings(headers: HeaderMap) -> Result<Json<Settings>, (StatusCode, Json<Value>)> {
+    if !admin_authorized(&headers) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Неверный пароль администратора"})),
+        ));
+    }
+    Ok(Json(SETTINGS.clone()))
+}
+
+async fn put_settings(
+    headers: HeaderMap,
+    Json(settings): Json<Settings>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !admin_authorized(&headers) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Неверный пароль администратора"})),
+        ));
+    }
+    save_settings(&settings)
+        .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({"error": error}))))?;
+    Ok(Json(
+        json!({"ok": true, "restart_required": true, "message": "Настройки сохранены. Перезапустите движок для применения."}),
+    ))
+}
+
+async fn restart_engine(headers: HeaderMap) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !admin_authorized(&headers) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Неверный пароль администратора"})),
+        ));
+    }
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        // A non-zero dedicated code makes both systemd Restart=on-failure and PM2 restart us.
+        std::process::exit(75);
+    });
+    Ok(Json(
+        json!({"ok": true, "message": "Движок перезапускается менеджером процессов"}),
+    ))
 }
 
 fn normalize_symbol(payload: &Value) -> Option<String> {
@@ -145,7 +226,11 @@ async fn broadcast_loop(io: SocketIo) {
 async fn engine_loop() {
     let mut manager = stream::StreamManager::new();
     if SETTINGS.force_demo {
-        let symbols: Vec<String> = SETTINGS.demo_symbols.iter().map(|s| s.to_string()).collect();
+        let symbols: Vec<String> = SETTINGS
+            .demo_symbols
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         manager.set_symbols(symbols, true).await;
     }
     scanner::radar_loop(&mut manager).await;
@@ -169,11 +254,19 @@ async fn main() {
         .route("/static/app.js", get(dashboard_js))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
+        .route("/api/settings/status", get(settings_status))
+        .route("/api/admin/settings", get(get_settings).put(put_settings))
+        .route("/api/admin/restart", post(restart_engine))
         .layer(socketio_layer);
 
     let address = format!("{}:{}", SETTINGS.host, SETTINGS.port);
-    println!("PulseBook (rust) listening on http://{address} · mode={} · LIVE TRADING LOCKED", SETTINGS.trading_mode);
-    let listener = tokio::net::TcpListener::bind(&address).await.expect("bind server port");
+    println!(
+        "PulseBook (rust) listening on http://{address} · mode={} · LIVE TRADING LOCKED",
+        SETTINGS.trading_mode
+    );
+    let listener = tokio::net::TcpListener::bind(&address)
+        .await
+        .expect("bind server port");
     axum::serve(listener, app).await.expect("server crashed");
 }
 
