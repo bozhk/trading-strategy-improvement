@@ -352,7 +352,7 @@ impl MarketState {
         near_misses.truncate(8);
 
         json!({
-            "version": 3,
+            "version": 4,
             "timestamp": now_ts(),
             "live_readiness": live_readiness(&pnls, self.data_quality_errors),
             "reject_counts": self.reject_counts,
@@ -461,7 +461,15 @@ mod tests {
             spread: None,
         });
         for _ in 0..=DIAGNOSTICS_MAXLEN {
-            state.diagnose("BTCUSDT", "attempt", None, Some(80), None, None, None);
+            state.diagnose(
+                "BTCUSDT",
+                "candidate_check",
+                None,
+                Some(80),
+                None,
+                None,
+                None,
+            );
         }
         assert_eq!(state.diagnostics.len(), DIAGNOSTICS_MAXLEN);
         assert!(state

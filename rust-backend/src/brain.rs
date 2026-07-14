@@ -33,7 +33,9 @@ const REVERSAL_CONFIRM_TICKS: u32 = 3;
 const REVERSAL_GRACE_SECONDS: f64 = 3.0;
 
 const POSITION_STATUS_LOG_SECONDS: f64 = 5.0;
-const ACCELERATION_CAP: f64 = 1_000_000.0;
+const ACCELERATION_CAP: f64 = 100.0;
+const MIN_TAPE_BASELINE_NOTIONAL: f64 = 100.0;
+const TAPE_BASELINE_CURRENT_SHARE: f64 = 0.05;
 
 #[derive(Debug, Clone, Default)]
 pub struct Tape {
@@ -41,6 +43,12 @@ pub struct Tape {
     pub sell_dominance: f64,
     pub buy_acceleration: f64,
     pub sell_acceleration: f64,
+    pub current_buy_notional: f64,
+    pub current_sell_notional: f64,
+    pub previous_buy_notional: f64,
+    pub previous_sell_notional: f64,
+    pub buy_baseline_valid: bool,
+    pub sell_baseline_valid: bool,
     pub buy_accelerating: bool,
     pub sell_accelerating: bool,
 }
@@ -94,17 +102,19 @@ pub fn directional_tape(ticks: &VecDeque<TradeTick>, now: f64) -> Tape {
     } else {
         0.5
     };
-    let buy_acceleration = if previous_buy > 0.0 {
+    // A ratio is meaningful only when the previous window contains enough
+    // absolute notional. This prevents an empty or microscopic baseline from
+    // turning a single trade into an automatic acceleration confirmation.
+    let adaptive_baseline = MIN_TAPE_BASELINE_NOTIONAL.max(total * TAPE_BASELINE_CURRENT_SHARE);
+    let buy_baseline_valid = previous_buy >= adaptive_baseline;
+    let sell_baseline_valid = previous_sell >= adaptive_baseline;
+    let buy_acceleration = if buy_baseline_valid {
         (current_buy / previous_buy).min(ACCELERATION_CAP)
-    } else if current_buy > 0.0 {
-        ACCELERATION_CAP
     } else {
         0.0
     };
-    let sell_acceleration = if previous_sell > 0.0 {
+    let sell_acceleration = if sell_baseline_valid {
         (current_sell / previous_sell).min(ACCELERATION_CAP)
-    } else if current_sell > 0.0 {
-        ACCELERATION_CAP
     } else {
         0.0
     };
@@ -114,10 +124,18 @@ pub fn directional_tape(ticks: &VecDeque<TradeTick>, now: f64) -> Tape {
         sell_dominance,
         buy_acceleration,
         sell_acceleration,
-        buy_accelerating: current_buy > 0.0
+        current_buy_notional: current_buy,
+        current_sell_notional: current_sell,
+        previous_buy_notional: previous_buy,
+        previous_sell_notional: previous_sell,
+        buy_baseline_valid,
+        sell_baseline_valid,
+        buy_accelerating: buy_baseline_valid
+            && current_buy > 0.0
             && buy_acceleration >= TAPE_ACCELERATION_MULTIPLIER
             && buy_dominance >= TAPE_DOMINANCE_RATIO,
-        sell_accelerating: current_sell > 0.0
+        sell_accelerating: sell_baseline_valid
+            && current_sell > 0.0
             && sell_acceleration >= TAPE_ACCELERATION_MULTIPLIER
             && sell_dominance >= TAPE_DOMINANCE_RATIO,
     }
@@ -729,14 +747,29 @@ fn attempt_entry(
     absorption: &Absorption,
 ) -> (bool, BtcTrend) {
     let trend = btc_trend(state, now);
-    let acceleration = if side == Side::LONG {
-        metrics.tape.buy_acceleration
-    } else {
-        metrics.tape.sell_acceleration
-    };
+    let (
+        acceleration,
+        acceleration_current_notional,
+        acceleration_baseline_notional,
+        acceleration_baseline_valid,
+    ) = if side == Side::LONG {
+            (
+                metrics.tape.buy_acceleration,
+                metrics.tape.current_buy_notional,
+                metrics.tape.previous_buy_notional,
+                metrics.tape.buy_baseline_valid,
+            )
+        } else {
+            (
+                metrics.tape.sell_acceleration,
+                metrics.tape.current_sell_notional,
+                metrics.tape.previous_sell_notional,
+                metrics.tape.sell_baseline_valid,
+            )
+        };
     state.diagnose(
         symbol,
-        "attempt",
+        "candidate_check",
         None,
         None,
         Some(metrics.imbalance),
@@ -907,6 +940,18 @@ fn attempt_entry(
         Some(acceleration),
         Some(metrics.spread),
     );
+    // This is the single actionable attempt in the pending setup lifecycle.
+    // The pending signal is removed after the economics decision below, so the
+    // stage cannot be emitted repeatedly on subsequent market updates.
+    state.diagnose(
+        symbol,
+        "entry_attempt",
+        None,
+        Some(score),
+        Some(metrics.imbalance),
+        Some(acceleration),
+        Some(metrics.spread),
+    );
 
     let cost_pct = estimated_round_trip_cost_pct(bid, ask);
     let raw_stop_pct = SETTINGS.min_stop_pct.max(
@@ -929,6 +974,19 @@ fn attempt_entry(
     } else {
         0.0
     };
+    let target_pct = (target - touch).abs() / touch * 100.0;
+    let stop_pct = risk / touch * 100.0;
+    let cost_pct_display = cost_pct * 100.0;
+    let cost_coverage = if cost_pct_display > 0.0 {
+        target_pct / cost_pct_display
+    } else {
+        0.0
+    };
+    let stop_cost_ratio = if cost_pct_display > 0.0 {
+        stop_pct / cost_pct_display
+    } else {
+        0.0
+    };
     let rejected_by_rr = net_reward <= 0.0 || net_rr < SETTINGS.min_net_reward_risk;
     let reason = if rejected_by_rr {
         format!("after-cost R/R {net_rr:.2}")
@@ -948,10 +1006,16 @@ fn attempt_entry(
         entry: touch,
         stop,
         target,
-        stop_pct: risk / touch * 100.0,
-        target_pct: (target - touch).abs() / touch * 100.0,
-        gross_rr: if risk > 0.0 { (target - touch).abs() / risk } else { 0.0 },
-        cost_pct: cost_pct * 100.0,
+        stop_pct,
+        target_pct,
+        gross_rr: if risk > 0.0 {
+            (target - touch).abs() / risk
+        } else {
+            0.0
+        },
+        cost_pct: cost_pct_display,
+        cost_coverage,
+        stop_cost_ratio,
         net_rr,
         required_net_rr: SETTINGS.min_net_reward_risk,
         score,
@@ -969,8 +1033,15 @@ fn attempt_entry(
         filter_gap: net_rr - SETTINGS.min_net_reward_risk,
         imbalance: metrics.imbalance,
         acceleration,
+        acceleration_current_notional,
+        acceleration_baseline_notional,
+        acceleration_baseline_valid,
         spread: metrics.spread,
         freshness: metrics.freshness,
+        absorption_initial_size: absorption.initial_size,
+        absorption_current_size: absorption.current_size,
+        absorption_depleted_quantity: absorption.depleted_quantity,
+        absorption_executed_quantity: absorption.executed_quantity,
         absorption_matched: absorption.matched_ratio,
         btc_trend: trend.direction.to_string(),
     };
@@ -1054,6 +1125,12 @@ fn metrics_to_radar(
         "sell_dominance": metrics.tape.sell_dominance,
         "buy_acceleration": metrics.tape.buy_acceleration,
         "sell_acceleration": metrics.tape.sell_acceleration,
+        "current_buy_notional": metrics.tape.current_buy_notional,
+        "current_sell_notional": metrics.tape.current_sell_notional,
+        "previous_buy_notional": metrics.tape.previous_buy_notional,
+        "previous_sell_notional": metrics.tape.previous_sell_notional,
+        "buy_baseline_valid": metrics.tape.buy_baseline_valid,
+        "sell_baseline_valid": metrics.tape.sell_baseline_valid,
         "buy_accelerating": metrics.tape.buy_accelerating,
         "sell_accelerating": metrics.tape.sell_accelerating,
         "bid_absorption": absorption_json(bid_absorption),
@@ -1277,5 +1354,65 @@ pub async fn brain_loop() {
             }
         }
         tokio::time::sleep(Duration::from_millis(350)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::directional_tape;
+    use crate::models::TradeTick;
+    use std::collections::VecDeque;
+
+    fn tick(timestamp: f64, is_buy: bool, notional: f64) -> TradeTick {
+        TradeTick {
+            timestamp,
+            is_buy,
+            price: 1.0,
+            size: notional,
+        }
+    }
+
+    #[test]
+    fn empty_baseline_never_confirms_acceleration() {
+        let ticks = VecDeque::from([tick(9.5, true, 10_000.0)]);
+        let tape = directional_tape(&ticks, 10.0);
+        assert!(!tape.buy_baseline_valid);
+        assert_eq!(tape.buy_acceleration, 0.0);
+        assert!(!tape.buy_accelerating);
+    }
+
+    #[test]
+    fn valid_three_x_buy_acceleration_is_confirmed_with_dominance() {
+        let ticks = VecDeque::from([
+            tick(8.5, true, 1_000.0),
+            tick(9.5, true, 3_200.0),
+            tick(9.5, false, 300.0),
+        ]);
+        let tape = directional_tape(&ticks, 10.0);
+        assert!(tape.buy_baseline_valid);
+        assert!(tape.buy_acceleration >= 3.0);
+        assert!(tape.buy_dominance >= 0.70);
+        assert!(tape.buy_accelerating);
+    }
+
+    #[test]
+    fn microscopic_baseline_is_rejected() {
+        let ticks = VecDeque::from([tick(8.5, true, 1.0), tick(9.5, true, 5_000.0)]);
+        let tape = directional_tape(&ticks, 10.0);
+        assert!(!tape.buy_baseline_valid);
+        assert!(!tape.buy_accelerating);
+    }
+
+    #[test]
+    fn acceleration_without_directional_dominance_is_rejected() {
+        let ticks = VecDeque::from([
+            tick(8.5, true, 1_000.0),
+            tick(9.5, true, 3_100.0),
+            tick(9.5, false, 2_000.0),
+        ]);
+        let tape = directional_tape(&ticks, 10.0);
+        assert!(tape.buy_baseline_valid);
+        assert!(tape.buy_acceleration >= 3.0);
+        assert!(!tape.buy_accelerating);
     }
 }
