@@ -1,8 +1,7 @@
 use crate::config::SETTINGS;
 use crate::execution::{entry_fill, estimated_round_trip_cost_pct, exit_fill, trade_pnl};
 use crate::models::{
-    now_ts, Absorption, ClosedTrade, OrderBook, PendingSignal, Position, Side, TradeTick,
-    WallTrack,
+    now_ts, Absorption, ClosedTrade, OrderBook, PendingSignal, Position, Side, TradeTick, WallTrack,
 };
 use crate::state::{MarketState, BTC_HISTORY_MAXLEN, STATE};
 use serde_json::{json, Value};
@@ -69,21 +68,45 @@ pub fn directional_tape(ticks: &VecDeque<TradeTick>, now: f64) -> Tape {
     for tick in ticks {
         let notional = tick.price * tick.size;
         if tick.timestamp >= current_start {
-            if tick.is_buy { current_buy += notional } else { current_sell += notional }
+            if tick.is_buy {
+                current_buy += notional
+            } else {
+                current_sell += notional
+            }
         } else if tick.timestamp >= previous_start {
-            if tick.is_buy { previous_buy += notional } else { previous_sell += notional }
+            if tick.is_buy {
+                previous_buy += notional
+            } else {
+                previous_sell += notional
+            }
         }
     }
 
     let total = current_buy + current_sell;
-    let buy_dominance = if total > 0.0 { current_buy / total } else { 0.5 };
-    let sell_dominance = if total > 0.0 { current_sell / total } else { 0.5 };
+    let buy_dominance = if total > 0.0 {
+        current_buy / total
+    } else {
+        0.5
+    };
+    let sell_dominance = if total > 0.0 {
+        current_sell / total
+    } else {
+        0.5
+    };
     let buy_acceleration = if previous_buy > 0.0 {
         (current_buy / previous_buy).min(ACCELERATION_CAP)
-    } else if current_buy > 0.0 { ACCELERATION_CAP } else { 0.0 };
+    } else if current_buy > 0.0 {
+        ACCELERATION_CAP
+    } else {
+        0.0
+    };
     let sell_acceleration = if previous_sell > 0.0 {
         (current_sell / previous_sell).min(ACCELERATION_CAP)
-    } else if current_sell > 0.0 { ACCELERATION_CAP } else { 0.0 };
+    } else if current_sell > 0.0 {
+        ACCELERATION_CAP
+    } else {
+        0.0
+    };
 
     Tape {
         buy_dominance,
@@ -101,13 +124,23 @@ pub fn directional_tape(ticks: &VecDeque<TradeTick>, now: f64) -> Tape {
 
 pub fn book_metrics(book: &OrderBook, ticks: &VecDeque<TradeTick>, now: f64) -> Metrics {
     // Top 10 levels: bids descending, asks ascending.
-    let bids: Vec<(f64, f64)> = book.bids.iter().rev().take(10).map(|(p, q)| (p.0, *q)).collect();
+    let bids: Vec<(f64, f64)> = book
+        .bids
+        .iter()
+        .rev()
+        .take(10)
+        .map(|(p, q)| (p.0, *q))
+        .collect();
     let asks: Vec<(f64, f64)> = book.asks.iter().take(10).map(|(p, q)| (p.0, *q)).collect();
 
     let bid_volume: f64 = bids.iter().map(|(_, q)| q).sum();
     let ask_volume: f64 = asks.iter().map(|(_, q)| q).sum();
     let total_volume = bid_volume + ask_volume;
-    let imbalance = if total_volume > 0.0 { bid_volume / total_volume } else { 0.5 };
+    let imbalance = if total_volume > 0.0 {
+        bid_volume / total_volume
+    } else {
+        0.5
+    };
 
     let mut sizes: Vec<f64> = bids.iter().chain(asks.iter()).map(|(_, q)| *q).collect();
     sizes.sort_by(f64::total_cmp);
@@ -131,13 +164,25 @@ pub fn book_metrics(book: &OrderBook, ticks: &VecDeque<TradeTick>, now: f64) -> 
     let (mut buy_notional, mut sell_notional) = (0.0, 0.0);
     for tick in ticks.iter().filter(|t| now - t.timestamp <= 3.0) {
         let notional = tick.price * tick.size;
-        if tick.is_buy { buy_notional += notional } else { sell_notional += notional }
+        if tick.is_buy {
+            buy_notional += notional
+        } else {
+            sell_notional += notional
+        }
     }
     let total_notional = buy_notional + sell_notional;
-    let flow = if total_notional > 0.0 { buy_notional / total_notional } else { 0.5 };
+    let flow = if total_notional > 0.0 {
+        buy_notional / total_notional
+    } else {
+        0.5
+    };
 
     let (bid, ask) = book.quote();
-    let spread = if bid > 0.0 && ask > 0.0 { (ask - bid) / bid * 100.0 } else { 999.0 };
+    let spread = if bid > 0.0 && ask > 0.0 {
+        (ask - bid) / bid * 100.0
+    } else {
+        999.0
+    };
 
     Metrics {
         imbalance,
@@ -147,7 +192,11 @@ pub fn book_metrics(book: &OrderBook, ticks: &VecDeque<TradeTick>, now: f64) -> 
         flow,
         bid,
         ask,
-        mid: if bid > 0.0 && ask > 0.0 { (bid + ask) / 2.0 } else { 0.0 },
+        mid: if bid > 0.0 && ask > 0.0 {
+            (bid + ask) / 2.0
+        } else {
+            0.0
+        },
         spread,
         freshness: now - book.updated_at,
         tape: directional_tape(ticks, now),
@@ -156,7 +205,11 @@ pub fn book_metrics(book: &OrderBook, ticks: &VecDeque<TradeTick>, now: f64) -> 
 
 fn wall_price_tolerance(book: &OrderBook, wall_price: f64) -> f64 {
     let (bid, ask) = book.quote();
-    let live_spread = if bid > 0.0 && ask > 0.0 { ask - bid } else { 0.0 };
+    let live_spread = if bid > 0.0 && ask > 0.0 {
+        ask - bid
+    } else {
+        0.0
+    };
     live_spread.max(wall_price * 0.0001)
 }
 
@@ -219,7 +272,11 @@ fn update_wall_track(
         return None;
     };
 
-    let levels = if side == "ask" { &book.asks } else { &book.bids };
+    let levels = if side == "ask" {
+        &book.asks
+    } else {
+        &book.bids
+    };
     let current_size = levels
         .get(&ordered_float::OrderedFloat(track.price))
         .copied()
@@ -227,7 +284,9 @@ fn update_wall_track(
 
     if !track.verified {
         let matches = candidate
-            .map(|(price, _)| (price - track.price).abs() <= wall_price_tolerance(book, track.price))
+            .map(|(price, _)| {
+                (price - track.price).abs() <= wall_price_tolerance(book, track.price)
+            })
             .unwrap_or(false);
         if !matches {
             if let Some((price, quantity)) = candidate {
@@ -265,13 +324,25 @@ fn update_wall_track(
 
     let initial_size = track.initial_size;
     let depleted_quantity = (initial_size - current_size).max(0.0);
-    let depletion_ratio = if initial_size > 0.0 { depleted_quantity / initial_size } else { 0.0 };
+    let depletion_ratio = if initial_size > 0.0 {
+        depleted_quantity / initial_size
+    } else {
+        0.0
+    };
     let executed_quantity =
         executed_quantity_at_wall(ticks, side, track.price, track.started_at, now, book);
-    let matched_ratio = if depleted_quantity > 0.0 { executed_quantity / depleted_quantity } else { 0.0 };
+    let matched_ratio = if depleted_quantity > 0.0 {
+        executed_quantity / depleted_quantity
+    } else {
+        0.0
+    };
 
     let tape = directional_tape(ticks, now);
-    let tape_confirmed = if side == "ask" { tape.buy_accelerating } else { tape.sell_accelerating };
+    let tape_confirmed = if side == "ask" {
+        tape.buy_accelerating
+    } else {
+        tape.sell_accelerating
+    };
 
     let absorbed = depletion_ratio >= WALL_DEPLETION_RATIO
         && executed_quantity >= depleted_quantity * WALL_TAPE_MATCH_RATIO
@@ -307,14 +378,20 @@ fn update_wall_track(
 }
 
 fn record_btc_mid(state: &mut MarketState, now: f64) {
-    let Some(book) = state.books.get("BTCUSDT") else { return };
+    let Some(book) = state.books.get("BTCUSDT") else {
+        return;
+    };
     let (bid, ask) = book.quote();
     if bid <= 0.0 || ask <= 0.0 {
         return;
     }
     let mid = (bid + ask) / 2.0;
     let history = &mut state.btc_mid_history;
-    if history.back().map(|(ts, _)| now - ts >= 0.25).unwrap_or(true) {
+    if history
+        .back()
+        .map(|(ts, _)| now - ts >= 0.25)
+        .unwrap_or(true)
+    {
         if history.len() >= BTC_HISTORY_MAXLEN {
             history.pop_front();
         }
@@ -344,12 +421,21 @@ fn btc_trend(state: &MarketState, now: f64) -> BtcTrend {
         .collect();
 
     if samples.len() < 2 {
-        return BtcTrend { ready: false, direction: "UNKNOWN", change_pct: 0.0, coverage: 0.0 };
+        return BtcTrend {
+            ready: false,
+            direction: "UNKNOWN",
+            change_pct: 0.0,
+            coverage: 0.0,
+        };
     }
     let coverage = samples[samples.len() - 1].0 - samples[0].0;
     let start_price = samples[0].1;
     let end_price = samples[samples.len() - 1].1;
-    let change_pct = if start_price > 0.0 { (end_price - start_price) / start_price } else { 0.0 };
+    let change_pct = if start_price > 0.0 {
+        (end_price - start_price) / start_price
+    } else {
+        0.0
+    };
 
     let (direction, ready) = if coverage < BTC_MIN_TREND_COVERAGE_SECONDS {
         ("UNKNOWN", false)
@@ -360,7 +446,12 @@ fn btc_trend(state: &MarketState, now: f64) -> BtcTrend {
     } else {
         ("FLAT", true)
     };
-    BtcTrend { ready, direction, change_pct, coverage }
+    BtcTrend {
+        ready,
+        direction,
+        change_pct,
+        coverage,
+    }
 }
 
 fn btc_allows(state: &MarketState, symbol: &str, side: Side, now: f64) -> (bool, BtcTrend) {
@@ -427,18 +518,40 @@ fn open_position(
             last_status_log: now,
         },
     );
-    let detail = if context.is_empty() { String::new() } else { format!(" · {context}") };
+    let detail = if context.is_empty() {
+        String::new()
+    } else {
+        format!(" · {context}")
+    };
     let message = format!(
         "Paper {} @ {:.6} · stop {:.6} · target {:.6} · risk {:.2} USDT{detail}",
-        side.as_str(), fill.price, stop_price, target_price, risk_budget,
+        side.as_str(),
+        fill.price,
+        stop_price,
+        target_price,
+        risk_budget,
     );
     state.log("ENTRY", &message, symbol, 0.0);
     true
 }
 
-fn close_position(state: &mut MarketState, mut pos: Position, metrics: &Metrics, reason: &str, now: f64, detail: &str) {
+fn close_position(
+    state: &mut MarketState,
+    mut pos: Position,
+    metrics: &Metrics,
+    reason: &str,
+    now: f64,
+    detail: &str,
+) {
     let fill = exit_fill(pos.side, metrics.bid, metrics.ask, pos.quantity);
-    let (gross, pnl) = trade_pnl(pos.side, pos.entry, fill.price, pos.quantity, pos.entry_fee, fill.fee);
+    let (gross, pnl) = trade_pnl(
+        pos.side,
+        pos.entry,
+        fill.price,
+        pos.quantity,
+        pos.entry_fee,
+        fill.fee,
+    );
     let total_fees = pos.entry_fee + fill.fee;
     let symbol = std::mem::take(&mut pos.symbol);
 
@@ -462,11 +575,19 @@ fn close_position(state: &mut MarketState, mut pos: Position, metrics: &Metrics,
             "imbalance": metrics.imbalance, "flow": metrics.flow,
         }),
     });
-    let cooldown = if pnl < 0.0 { SETTINGS.loss_cooldown_seconds } else { SETTINGS.cooldown_seconds };
+    let cooldown = if pnl < 0.0 {
+        SETTINGS.loss_cooldown_seconds
+    } else {
+        SETTINGS.cooldown_seconds
+    };
     state.cooldowns.insert(symbol.clone(), now + cooldown);
     let held = now - pos.opened_at;
     let outcome = if pnl > 0.0 { "WIN" } else { "LOSS" };
-    let extra = if detail.is_empty() { String::new() } else { format!(" · {detail}") };
+    let extra = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" · {detail}")
+    };
     let message = format!(
         "{reason} [{outcome}] {} · net {pnl:+.2} USDT · gross {gross:+.2} · fees {total_fees:.2} · held {held:.1}s · MFE {:+.2} / MAE {:+.2}{extra}",
         pos.side.as_str(), pos.mfe, pos.mae,
@@ -482,11 +603,27 @@ fn position_return(pos: &Position, mark: f64) -> f64 {
 }
 
 /// Returns the position back unless it was closed.
-fn manage_position(state: &mut MarketState, mut pos: Position, metrics: &Metrics, now: f64) -> Option<Position> {
-    let executable = if pos.side == Side::LONG { metrics.bid } else { metrics.ask };
+fn manage_position(
+    state: &mut MarketState,
+    mut pos: Position,
+    metrics: &Metrics,
+    now: f64,
+) -> Option<Position> {
+    let executable = if pos.side == Side::LONG {
+        metrics.bid
+    } else {
+        metrics.ask
+    };
     pos.mark = executable;
     let estimated_exit_fee = executable * pos.quantity * SETTINGS.taker_fee_pct;
-    let (_, unrealized) = trade_pnl(pos.side, pos.entry, executable, pos.quantity, pos.entry_fee, estimated_exit_fee);
+    let (_, unrealized) = trade_pnl(
+        pos.side,
+        pos.entry,
+        executable,
+        pos.quantity,
+        pos.entry_fee,
+        estimated_exit_fee,
+    );
     pos.unrealized = unrealized;
     let gross_return = position_return(&pos, executable);
     pos.peak_return = pos.peak_return.max(gross_return);
@@ -499,8 +636,16 @@ fn manage_position(state: &mut MarketState, mut pos: Position, metrics: &Metrics
         0.0
     };
 
-    let stop_hit = if pos.side == Side::LONG { executable <= pos.stop_price } else { executable >= pos.stop_price };
-    let target_hit = if pos.side == Side::LONG { executable >= pos.target_price } else { executable <= pos.target_price };
+    let stop_hit = if pos.side == Side::LONG {
+        executable <= pos.stop_price
+    } else {
+        executable >= pos.stop_price
+    };
+    let target_hit = if pos.side == Side::LONG {
+        executable >= pos.target_price
+    } else {
+        executable <= pos.target_price
+    };
     if stop_hit {
         close_position(state, pos, metrics, "STRUCTURAL STOP", now, "");
         return None;
@@ -521,10 +666,23 @@ fn manage_position(state: &mut MarketState, mut pos: Position, metrics: &Metrics
 
     let tape_reversed = (pos.side == Side::LONG && metrics.tape.sell_accelerating)
         || (pos.side == Side::SHORT && metrics.tape.buy_accelerating);
-    pos.reversal_streak = if tape_reversed { pos.reversal_streak + 1 } else { 0 };
-    if pos.reversal_streak >= REVERSAL_CONFIRM_TICKS && now - pos.opened_at >= REVERSAL_GRACE_SECONDS {
+    pos.reversal_streak = if tape_reversed {
+        pos.reversal_streak + 1
+    } else {
+        0
+    };
+    if pos.reversal_streak >= REVERSAL_CONFIRM_TICKS
+        && now - pos.opened_at >= REVERSAL_GRACE_SECONDS
+    {
         let detail = format!("opposing tape persisted {} ticks", pos.reversal_streak);
-        close_position(state, pos, metrics, "CONFIRMED FLOW INVALIDATION", now, &detail);
+        close_position(
+            state,
+            pos,
+            metrics,
+            "CONFIRMED FLOW INVALIDATION",
+            now,
+            &detail,
+        );
         return None;
     }
 
@@ -540,8 +698,16 @@ fn manage_position(state: &mut MarketState, mut pos: Position, metrics: &Metrics
     if now - pos.last_status_log >= POSITION_STATUS_LOG_SECONDS {
         pos.last_status_log = now;
         let held = now - pos.opened_at;
-        let flow = if pos.side == Side::LONG { metrics.tape.buy_dominance } else { metrics.tape.sell_dominance };
-        let be = if pos.breakeven_armed { " · BE-armed" } else { "" };
+        let flow = if pos.side == Side::LONG {
+            metrics.tape.buy_dominance
+        } else {
+            metrics.tape.sell_dominance
+        };
+        let be = if pos.breakeven_armed {
+            " · BE-armed"
+        } else {
+            ""
+        };
         let message = format!(
             "{} {held:.0}s · mark {:.6} ({:+.3}%) · uPnL {:+.2} USDT · peak {:+.3}% · flow-with-us {:.0}% · imb {:.2} · spread {:.3}%{be} · {r_now:+.2}R · stop {:.6}",
             pos.side.as_str(), metrics.mid, gross_return * 100.0, pos.unrealized,
@@ -562,16 +728,40 @@ fn attempt_entry(
     absorption: &Absorption,
 ) -> (bool, BtcTrend) {
     let trend = btc_trend(state, now);
+    let acceleration = if side == Side::LONG {
+        metrics.tape.buy_acceleration
+    } else {
+        metrics.tape.sell_acceleration
+    };
+    state.diagnose(
+        symbol,
+        "attempt",
+        None,
+        None,
+        Some(metrics.imbalance),
+        Some(acceleration),
+        Some(metrics.spread),
+    );
     if state.positions.len() >= SETTINGS.max_open_positions {
         state.reject(symbol, "portfolio position limit");
         return (false, trend);
     }
-    let daily_pnl: f64 = state.closed.iter().filter(|t| now - t.closed_at <= 86_400.0).map(|t| t.pnl).sum();
+    let daily_pnl: f64 = state
+        .closed
+        .iter()
+        .filter(|t| now - t.closed_at <= 86_400.0)
+        .map(|t| t.pnl)
+        .sum();
     if daily_pnl <= -SETTINGS.account_equity * SETTINGS.max_daily_loss_pct {
         state.reject(symbol, "daily loss circuit breaker");
         return (false, trend);
     }
-    let recent: Vec<f64> = state.closed.iter().take(SETTINGS.max_consecutive_losses).map(|t| t.pnl).collect();
+    let recent: Vec<f64> = state
+        .closed
+        .iter()
+        .take(SETTINGS.max_consecutive_losses)
+        .map(|t| t.pnl)
+        .collect();
     if recent.len() == SETTINGS.max_consecutive_losses && recent.iter().all(|p| *p < 0.0) {
         state.reject(symbol, "loss-streak circuit breaker");
         return (false, trend);
@@ -583,7 +773,11 @@ fn attempt_entry(
     } else {
         metrics.imbalance <= ENTRY_IMBALANCE_SHORT
     };
-    let tape_ok = if side == Side::LONG { metrics.tape.buy_accelerating } else { metrics.tape.sell_accelerating };
+    let tape_ok = if side == Side::LONG {
+        metrics.tape.buy_accelerating
+    } else {
+        metrics.tape.sell_accelerating
+    };
     let score: i64 = 25 * i64::from(directional_imbalance)
         + 20 * i64::from(btc_allowed)
         + 20 * i64::from(tape_ok)
@@ -591,8 +785,20 @@ fn attempt_entry(
         + 10 * i64::from(metrics.spread <= SETTINGS.max_spread_pct * 0.65)
         + 10 * i64::from(metrics.freshness <= 1.0);
     if score < SETTINGS.min_confluence_score {
-        let reason = format!("confluence {score}/100 below {}", SETTINGS.min_confluence_score);
+        let reason = format!(
+            "confluence {score}/100 below {}",
+            SETTINGS.min_confluence_score
+        );
         state.reject(symbol, &reason);
+        state.diagnose(
+            symbol,
+            "rejected",
+            Some(&reason),
+            Some(score),
+            Some(metrics.imbalance),
+            Some(acceleration),
+            Some(metrics.spread),
+        );
         return (false, trend);
     }
 
@@ -623,13 +829,35 @@ fn attempt_entry(
             side.as_str()
         );
         state.log("SETUP", &message, symbol, 0.0);
+        state.diagnose(
+            symbol,
+            "qualified",
+            None,
+            Some(score),
+            Some(metrics.imbalance),
+            Some(acceleration),
+            Some(metrics.spread),
+        );
         return (false, trend);
     }
 
-    let pending = state.pending_signals.get_mut(symbol).unwrap();
-    if now - pending.created > SETTINGS.signal_expiry_seconds {
+    if state
+        .pending_signals
+        .get(symbol)
+        .map(|pending| now - pending.created > SETTINGS.signal_expiry_seconds)
+        .unwrap_or(false)
+    {
         state.pending_signals.remove(symbol);
         state.reject(symbol, "setup expired before retest");
+        state.diagnose(
+            symbol,
+            "rejected",
+            Some("setup expired before retest"),
+            Some(score),
+            Some(metrics.imbalance),
+            Some(acceleration),
+            Some(metrics.spread),
+        );
         return (false, trend);
     }
 
@@ -638,36 +866,81 @@ fn attempt_entry(
     } else {
         ask < wall * (1.0 - ENTRY_BREAKOUT_TOLERANCE_PCT)
     };
-    pending.broken = pending.broken || broke;
-    if !pending.broken {
-        return (false, trend);
-    }
-    let tolerance = wall * SETTINGS.retest_tolerance_pct;
-    let retest = if side == Side::LONG {
-        bid >= wall - tolerance && bid <= wall + tolerance * 2.0
-    } else {
-        ask <= wall + tolerance && ask >= wall - tolerance * 2.0
+    let (newly_broken, broken, hold_ticks) = {
+        let pending = state.pending_signals.get_mut(symbol).unwrap();
+        let newly_broken = broke && !pending.broken;
+        pending.broken = pending.broken || broke;
+        if !pending.broken {
+            (newly_broken, false, pending.hold_ticks)
+        } else {
+            let tolerance = wall * SETTINGS.retest_tolerance_pct;
+            let retest = if side == Side::LONG {
+                bid >= wall - tolerance && bid <= wall + tolerance * 2.0
+            } else {
+                ask <= wall + tolerance && ask >= wall - tolerance * 2.0
+            };
+            pending.hold_ticks = if retest { pending.hold_ticks + 1 } else { 0 };
+            (newly_broken, true, pending.hold_ticks)
+        }
     };
-    pending.hold_ticks = if retest { pending.hold_ticks + 1 } else { 0 };
-    if pending.hold_ticks < SETTINGS.retest_hold_ticks {
+    if newly_broken {
+        state.diagnose(
+            symbol,
+            "breakout",
+            None,
+            Some(score),
+            Some(metrics.imbalance),
+            Some(acceleration),
+            Some(metrics.spread),
+        );
+    }
+    if !broken || hold_ticks < SETTINGS.retest_hold_ticks {
         return (false, trend);
     }
+    state.diagnose(
+        symbol,
+        "retest",
+        None,
+        Some(score),
+        Some(metrics.imbalance),
+        Some(acceleration),
+        Some(metrics.spread),
+    );
 
     let cost_pct = estimated_round_trip_cost_pct(bid, ask);
-    let raw_stop_pct = SETTINGS
-        .min_stop_pct
-        .max(SETTINGS.max_stop_pct.min(SETTINGS.structure_buffer_pct + metrics.spread / 100.0 * 2.0));
+    let raw_stop_pct = SETTINGS.min_stop_pct.max(
+        SETTINGS
+            .max_stop_pct
+            .min(SETTINGS.structure_buffer_pct + metrics.spread / 100.0 * 2.0),
+    );
     let touch = if side == Side::LONG { ask } else { bid };
-    let stop = if side == Side::LONG { wall * (1.0 - raw_stop_pct) } else { wall * (1.0 + raw_stop_pct) };
+    let stop = if side == Side::LONG {
+        wall * (1.0 - raw_stop_pct)
+    } else {
+        wall * (1.0 + raw_stop_pct)
+    };
     let risk = (touch - stop).abs();
     let target = touch + risk * SETTINGS.target_r_multiple * side.direction();
     let net_reward = (target - touch).abs() / touch - cost_pct;
     let net_risk = risk / touch + cost_pct;
-    let net_rr = if net_risk > 0.0 { net_reward / net_risk } else { 0.0 };
+    let net_rr = if net_risk > 0.0 {
+        net_reward / net_risk
+    } else {
+        0.0
+    };
     if net_reward <= 0.0 || net_rr < SETTINGS.min_net_reward_risk {
         state.pending_signals.remove(symbol);
         let reason = format!("after-cost R/R {net_rr:.2}");
         state.reject(symbol, &reason);
+        state.diagnose(
+            symbol,
+            "rejected",
+            Some(&reason),
+            Some(score),
+            Some(metrics.imbalance),
+            Some(acceleration),
+            Some(metrics.spread),
+        );
         return (false, trend);
     }
 
@@ -679,12 +952,32 @@ fn attempt_entry(
         "net_rr": net_rr, "sequence": sequence,
     });
     let context = format!("breakout-retest · score {score}/100 · net R/R {net_rr:.2}");
-    let opened = open_position(state, symbol, side, bid, ask, now, stop, target, snapshot, &context);
+    let opened = open_position(
+        state, symbol, side, bid, ask, now, stop, target, snapshot, &context,
+    );
     state.pending_signals.remove(symbol);
+    if opened {
+        state.diagnose(
+            symbol,
+            "entered",
+            None,
+            Some(score),
+            Some(metrics.imbalance),
+            Some(acceleration),
+            Some(metrics.spread),
+        );
+    }
     (opened, trend)
 }
 
-fn metrics_to_radar(symbol: &str, metrics: &Metrics, status: &str, trend: &BtcTrend, bid_absorption: &Option<Absorption>, ask_absorption: &Option<Absorption>) -> Value {
+fn metrics_to_radar(
+    symbol: &str,
+    metrics: &Metrics,
+    status: &str,
+    trend: &BtcTrend,
+    bid_absorption: &Option<Absorption>,
+    ask_absorption: &Option<Absorption>,
+) -> Value {
     let absorption_json = |a: &Option<Absorption>| -> Value {
         match a {
             None => Value::Null,
@@ -726,20 +1019,43 @@ fn metrics_to_radar(symbol: &str, metrics: &Metrics, status: &str, trend: &BtcTr
 }
 
 pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
-    let Some(book) = state.books.get(symbol) else { return };
+    let Some(book) = state.books.get(symbol) else {
+        return;
+    };
     let empty = VecDeque::new();
     let ticks = state.trades.get(symbol).unwrap_or(&empty);
     let metrics = book_metrics(book, ticks, now);
 
     // Wall tracking needs split borrows: books/trades read-only, tracks mutable.
     let (bid_absorption, ask_absorption) = {
-        let MarketState { books, trades, wall_tracks, .. } = state;
+        let MarketState {
+            books,
+            trades,
+            wall_tracks,
+            ..
+        } = state;
         let book = books.get(symbol).unwrap();
         let empty = VecDeque::new();
         let ticks = trades.get(symbol).unwrap_or(&empty);
         (
-            update_wall_track(wall_tracks, book, ticks, symbol, "bid", metrics.strongest_bid_wall, now),
-            update_wall_track(wall_tracks, book, ticks, symbol, "ask", metrics.strongest_ask_wall, now),
+            update_wall_track(
+                wall_tracks,
+                book,
+                ticks,
+                symbol,
+                "bid",
+                metrics.strongest_bid_wall,
+                now,
+            ),
+            update_wall_track(
+                wall_tracks,
+                book,
+                ticks,
+                symbol,
+                "ask",
+                metrics.strongest_ask_wall,
+                now,
+            ),
         )
     };
 
@@ -750,26 +1066,72 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
         if let Some(pos) = manage_position(state, pos, &metrics, now) {
             state.positions.insert(symbol.to_string(), pos);
         }
-        let radar = metrics_to_radar(symbol, &metrics, status, &trend, &bid_absorption, &ask_absorption);
+        let radar = metrics_to_radar(
+            symbol,
+            &metrics,
+            status,
+            &trend,
+            &bid_absorption,
+            &ask_absorption,
+        );
         state.metrics.insert(symbol.to_string(), radar);
         return;
     }
 
     if now < state.cooldowns.get(symbol).copied().unwrap_or(0.0) {
-        let radar = metrics_to_radar(symbol, &metrics, "COOLDOWN", &trend, &bid_absorption, &ask_absorption);
+        let radar = metrics_to_radar(
+            symbol,
+            &metrics,
+            "COOLDOWN",
+            &trend,
+            &bid_absorption,
+            &ask_absorption,
+        );
         state.metrics.insert(symbol.to_string(), radar);
         return;
     }
 
     if metrics.freshness > BOOK_FRESHNESS_SECONDS {
+        state.diagnose(
+            symbol,
+            "rejected",
+            Some("stale book"),
+            None,
+            Some(metrics.imbalance),
+            None,
+            Some(metrics.spread),
+        );
         state.log("SKIP", "TIMEOUT / SKIPPED · stale book", symbol, 8.0);
-        let radar = metrics_to_radar(symbol, &metrics, "WATCH", &trend, &bid_absorption, &ask_absorption);
+        let radar = metrics_to_radar(
+            symbol,
+            &metrics,
+            "WATCH",
+            &trend,
+            &bid_absorption,
+            &ask_absorption,
+        );
         state.metrics.insert(symbol.to_string(), radar);
         return;
     }
     if metrics.spread > SETTINGS.max_spread_pct {
+        state.diagnose(
+            symbol,
+            "rejected",
+            Some("spread expanded"),
+            None,
+            Some(metrics.imbalance),
+            None,
+            Some(metrics.spread),
+        );
         state.log("SKIP", "TIMEOUT / SKIPPED · spread expanded", symbol, 8.0);
-        let radar = metrics_to_radar(symbol, &metrics, "WATCH", &trend, &bid_absorption, &ask_absorption);
+        let radar = metrics_to_radar(
+            symbol,
+            &metrics,
+            "WATCH",
+            &trend,
+            &bid_absorption,
+            &ask_absorption,
+        );
         state.metrics.insert(symbol.to_string(), radar);
         return;
     }
@@ -789,18 +1151,56 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
     }
 
     let status = if entered {
-        state.positions.get(symbol).map(|p| p.side.as_str()).unwrap_or("WATCH")
+        state
+            .positions
+            .get(symbol)
+            .map(|p| p.side.as_str())
+            .unwrap_or("WATCH")
     } else {
         "WATCH"
     };
     if !entered {
         if (metrics.imbalance - 0.5).abs() < 0.1 {
+            state.diagnose(
+                symbol,
+                "rejected",
+                Some("low imbalance"),
+                None,
+                Some(metrics.imbalance),
+                None,
+                Some(metrics.spread),
+            );
             state.log("SKIP", "TIMEOUT / SKIPPED · low imbalance", symbol, 8.0);
         } else if !metrics.tape.buy_accelerating && !metrics.tape.sell_accelerating {
-            state.log("SKIP", "TIMEOUT / SKIPPED · no 3x tape acceleration", symbol, 8.0);
+            let acceleration = metrics
+                .tape
+                .buy_acceleration
+                .max(metrics.tape.sell_acceleration);
+            state.diagnose(
+                symbol,
+                "rejected",
+                Some("no 3x tape acceleration"),
+                None,
+                Some(metrics.imbalance),
+                Some(acceleration),
+                Some(metrics.spread),
+            );
+            state.log(
+                "SKIP",
+                "TIMEOUT / SKIPPED · no 3x tape acceleration",
+                symbol,
+                8.0,
+            );
         }
     }
-    let radar = metrics_to_radar(symbol, &metrics, status, &trend, &bid_absorption, &ask_absorption);
+    let radar = metrics_to_radar(
+        symbol,
+        &metrics,
+        status,
+        &trend,
+        &bid_absorption,
+        &ask_absorption,
+    );
     state.metrics.insert(symbol.to_string(), radar);
 }
 

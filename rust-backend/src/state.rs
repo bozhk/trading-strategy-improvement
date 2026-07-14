@@ -10,7 +10,21 @@ use std::sync::LazyLock;
 pub const TRADES_MAXLEN: usize = 1200;
 const CLOSED_MAXLEN: usize = 1000;
 const LOGS_MAXLEN: usize = 180;
+const DIAGNOSTICS_MAXLEN: usize = 20_000;
+const DIAGNOSTICS_WINDOW_SECONDS: f64 = 3_600.0;
 pub const BTC_HISTORY_MAXLEN: usize = 400;
+
+#[derive(Debug, Clone)]
+pub struct DiagnosticEvent {
+    pub timestamp: f64,
+    pub symbol: String,
+    pub stage: String,
+    pub reason: Option<String>,
+    pub score: Option<i64>,
+    pub imbalance: Option<f64>,
+    pub acceleration: Option<f64>,
+    pub spread: Option<f64>,
+}
 
 #[derive(Default)]
 pub struct MarketState {
@@ -25,6 +39,7 @@ pub struct MarketState {
     pub wall_tracks: HashMap<(String, &'static str), WallTrack>,
     pub pending_signals: HashMap<String, PendingSignal>,
     pub reject_counts: HashMap<String, u64>,
+    pub diagnostics: VecDeque<DiagnosticEvent>,
     pub data_quality_errors: u64,
     pub btc_mid_history: VecDeque<(f64, f64)>,
     pub source: String,
@@ -81,6 +96,40 @@ impl MarketState {
     pub fn reject(&mut self, symbol: &str, reason: &str) {
         *self.reject_counts.entry(reason.to_string()).or_insert(0) += 1;
         self.log("SKIP", &format!("ENTRY REJECTED · {reason}"), symbol, 5.0);
+    }
+
+    pub fn diagnose(
+        &mut self,
+        symbol: &str,
+        stage: &str,
+        reason: Option<&str>,
+        score: Option<i64>,
+        imbalance: Option<f64>,
+        acceleration: Option<f64>,
+        spread: Option<f64>,
+    ) {
+        let now = now_ts();
+        while self
+            .diagnostics
+            .front()
+            .map(|event| now - event.timestamp > DIAGNOSTICS_WINDOW_SECONDS)
+            .unwrap_or(false)
+        {
+            self.diagnostics.pop_front();
+        }
+        if self.diagnostics.len() >= DIAGNOSTICS_MAXLEN {
+            self.diagnostics.pop_front();
+        }
+        self.diagnostics.push_back(DiagnosticEvent {
+            timestamp: now,
+            symbol: symbol.to_string(),
+            stage: stage.to_string(),
+            reason: reason.map(str::to_string),
+            score,
+            imbalance,
+            acceleration,
+            spread,
+        });
     }
 
     pub fn snapshot(&self) -> Value {
@@ -148,6 +197,59 @@ impl MarketState {
         let mut exit_reasons: Vec<(&str, u64)> = exit_reasons.into_iter().collect();
         exit_reasons.sort_by(|a, b| b.1.cmp(&a.1));
 
+        let cutoff = now_ts() - DIAGNOSTICS_WINDOW_SECONDS;
+        let diagnostics: Vec<&DiagnosticEvent> = self
+            .diagnostics
+            .iter()
+            .filter(|event| event.timestamp >= cutoff)
+            .collect();
+        let mut stages: HashMap<&str, u64> = HashMap::new();
+        let mut rejection_reasons: HashMap<&str, u64> = HashMap::new();
+        let mut score_sum = 0_i64;
+        let mut score_count = 0_u64;
+        let mut imbalance_sum = 0.0;
+        let mut imbalance_count = 0_u64;
+        let mut acceleration_sum = 0.0;
+        let mut acceleration_count = 0_u64;
+        let mut spread_sum = 0.0;
+        let mut spread_count = 0_u64;
+        for event in &diagnostics {
+            *stages.entry(event.stage.as_str()).or_insert(0) += 1;
+            if let Some(reason) = event.reason.as_deref() {
+                *rejection_reasons.entry(reason).or_insert(0) += 1;
+            }
+            if let Some(score) = event.score {
+                score_sum += score;
+                score_count += 1;
+            }
+            if let Some(value) = event.imbalance {
+                imbalance_sum += value;
+                imbalance_count += 1;
+            }
+            if let Some(value) = event.acceleration {
+                acceleration_sum += value.min(100.0);
+                acceleration_count += 1;
+            }
+            if let Some(value) = event.spread {
+                spread_sum += value;
+                spread_count += 1;
+            }
+        }
+        let mut rejection_reasons: Vec<(&str, u64)> = rejection_reasons.into_iter().collect();
+        rejection_reasons.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let mut near_misses: Vec<&DiagnosticEvent> = diagnostics
+            .iter()
+            .copied()
+            .filter(|event| event.stage == "rejected" || event.stage == "retest")
+            .collect();
+        near_misses.sort_by(|a, b| {
+            b.score
+                .unwrap_or_default()
+                .cmp(&a.score.unwrap_or_default())
+                .then_with(|| b.timestamp.total_cmp(&a.timestamp))
+        });
+        near_misses.truncate(8);
+
         json!({
             "version": 3,
             "timestamp": now_ts(),
@@ -181,6 +283,26 @@ impl MarketState {
             "exit_reasons": exit_reasons.iter().map(|(reason, count)| json!({
                 "reason": reason, "count": count,
             })).collect::<Vec<_>>(),
+            "signal_diagnostics": {
+                "window_seconds": DIAGNOSTICS_WINDOW_SECONDS,
+                "events": diagnostics.len(),
+                "stages": stages,
+                "rejections": rejection_reasons.iter().take(8).map(|(reason, count)| json!({
+                    "reason": reason, "count": count,
+                })).collect::<Vec<_>>(),
+                "averages": {
+                    "score": if score_count == 0 { Value::Null } else { json!(score_sum as f64 / score_count as f64) },
+                    "imbalance": if imbalance_count == 0 { Value::Null } else { json!(imbalance_sum / imbalance_count as f64) },
+                    "acceleration": if acceleration_count == 0 { Value::Null } else { json!(acceleration_sum / acceleration_count as f64) },
+                    "spread": if spread_count == 0 { Value::Null } else { json!(spread_sum / spread_count as f64) },
+                },
+                "near_misses": near_misses.iter().map(|event| json!({
+                    "timestamp": event.timestamp, "symbol": event.symbol,
+                    "stage": event.stage, "reason": event.reason,
+                    "score": event.score, "imbalance": event.imbalance,
+                    "acceleration": event.acceleration, "spread": event.spread,
+                })).collect::<Vec<_>>(),
+            },
             "closed_trades": closed.iter().take(40).map(|t| json!({
                 "symbol": t.symbol, "side": t.side, "entry": t.entry, "exit": t.exit,
                 "pnl": t.pnl, "reason": t.reason, "opened_at": t.opened_at,
@@ -210,3 +332,53 @@ impl MarketState {
 }
 
 pub static STATE: LazyLock<Mutex<MarketState>> = LazyLock::new(|| Mutex::new(MarketState::new()));
+
+#[cfg(test)]
+mod tests {
+    use super::{DiagnosticEvent, MarketState, DIAGNOSTICS_MAXLEN, DIAGNOSTICS_WINDOW_SECONDS};
+    use crate::models::now_ts;
+
+    #[test]
+    fn diagnostics_are_bounded_and_prune_expired_events() {
+        let mut state = MarketState::new();
+        state.diagnostics.push_back(DiagnosticEvent {
+            timestamp: now_ts() - DIAGNOSTICS_WINDOW_SECONDS - 1.0,
+            symbol: "OLDUSDT".into(),
+            stage: "rejected".into(),
+            reason: Some("expired".into()),
+            score: None,
+            imbalance: None,
+            acceleration: None,
+            spread: None,
+        });
+        for _ in 0..=DIAGNOSTICS_MAXLEN {
+            state.diagnose("BTCUSDT", "attempt", None, Some(80), None, None, None);
+        }
+        assert_eq!(state.diagnostics.len(), DIAGNOSTICS_MAXLEN);
+        assert!(state
+            .diagnostics
+            .iter()
+            .all(|event| event.symbol != "OLDUSDT"));
+    }
+
+    #[test]
+    fn snapshot_aggregates_signal_diagnostics() {
+        let mut state = MarketState::new();
+        state.diagnose(
+            "BTCUSDT",
+            "rejected",
+            Some("low imbalance"),
+            Some(70),
+            Some(0.5),
+            Some(2.0),
+            Some(0.01),
+        );
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot["signal_diagnostics"]["events"], 1);
+        assert_eq!(snapshot["signal_diagnostics"]["stages"]["rejected"], 1);
+        assert_eq!(
+            snapshot["signal_diagnostics"]["rejections"][0]["reason"],
+            "low imbalance"
+        );
+    }
+}

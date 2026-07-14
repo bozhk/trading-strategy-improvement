@@ -49,6 +49,19 @@
       </aside>
     </section>
 
+    <section class="panel diagnostics-panel" aria-labelledby="diagnostics-title">
+      <div class="panel-head"><div><p class="eyebrow">ДИАГНОСТИКА / 60 МИНУТ</p><h2 id="diagnostics-title">Воронка сигналов</h2></div><span id="diagnostics-events" class="counter">00 СОБЫТИЙ</span></div>
+      <div id="diagnostics-empty" class="empty-block">Статистика накопится после запуска обновлённого движка.</div>
+      <div id="diagnostics-content" class="diagnostics-content" hidden>
+        <div id="diagnostics-stages" class="funnel-grid"></div>
+        <div class="diagnostics-lower">
+          <section><h3>Почему нет входов</h3><div id="diagnostics-rejections" class="reason-list"></div></section>
+          <section><h3>Средние значения</h3><div id="diagnostics-averages" class="average-grid"></div></section>
+          <section><h3>Ближайшие кандидаты</h3><div id="diagnostics-near" class="near-list"></div></section>
+        </div>
+      </div>
+    </section>
+
     <section class="panel trades-panel" aria-labelledby="trades-title">
       <div class="panel-head"><div><p class="eyebrow">ИСТОРИЯ</p><h2 id="trades-title">Последние закрытые сделки</h2></div><span id="last-update">Нет синхронизации</span></div>
       <div class="table-wrap"><table><thead><tr><th>Закрыто</th><th>Инструмент</th><th>Сторона</th><th>Вход → Выход</th><th>Результат</th><th>Причина</th></tr></thead><tbody id="trades-body"><tr><td colspan="6" class="empty">В этой сессии нет закрытых сделок.</td></tr></tbody></table></div>
