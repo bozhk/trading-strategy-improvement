@@ -1,7 +1,8 @@
 use crate::config::SETTINGS;
 use crate::execution::{entry_fill, estimated_round_trip_cost_pct, exit_fill, trade_pnl};
 use crate::models::{
-    now_ts, Absorption, ClosedTrade, OrderBook, PendingSignal, Position, Side, TradeTick, WallTrack,
+    now_ts, Absorption, ClosedTrade, OrderBook, PendingSignal, Position, SetupAnalysis, Side,
+    TradeTick, WallTrack,
 };
 use crate::state::{MarketState, BTC_HISTORY_MAXLEN, STATE};
 use serde_json::{json, Value};
@@ -928,9 +929,54 @@ fn attempt_entry(
     } else {
         0.0
     };
-    if net_reward <= 0.0 || net_rr < SETTINGS.min_net_reward_risk {
+    let rejected_by_rr = net_reward <= 0.0 || net_rr < SETTINGS.min_net_reward_risk;
+    let reason = if rejected_by_rr {
+        format!("after-cost R/R {net_rr:.2}")
+    } else {
+        "entry accepted".to_string()
+    };
+    let setup_analysis = SetupAnalysis {
+        id: 0,
+        timestamp: now,
+        symbol: symbol.to_string(),
+        side: side.as_str().to_string(),
+        decision: if rejected_by_rr { "REJECT" } else { "ENTRY" }.into(),
+        reason: reason.clone(),
+        wall,
+        breakout_price: wall * (1.0 + ENTRY_BREAKOUT_TOLERANCE_PCT * side.direction()),
+        retest_price: touch,
+        entry: touch,
+        stop,
+        target,
+        stop_pct: risk / touch * 100.0,
+        target_pct: (target - touch).abs() / touch * 100.0,
+        gross_rr: if risk > 0.0 { (target - touch).abs() / risk } else { 0.0 },
+        cost_pct: cost_pct * 100.0,
+        net_rr,
+        required_net_rr: SETTINGS.min_net_reward_risk,
+        score,
+        score_required: SETTINGS.min_confluence_score,
+        score_breakdown: json!({
+            "directional_imbalance": 25 * i64::from(directional_imbalance),
+            "btc_alignment": 20 * i64::from(btc_allowed),
+            "tape_acceleration": 20 * i64::from(tape_ok),
+            "absorption_match": 15 * i64::from(absorption.matched_ratio >= 0.95),
+            "tight_spread": 10 * i64::from(metrics.spread <= SETTINGS.max_spread_pct * 0.65),
+            "fresh_book": 10 * i64::from(metrics.freshness <= 1.0),
+        }),
+        filter_actual: net_rr,
+        filter_required: SETTINGS.min_net_reward_risk,
+        filter_gap: net_rr - SETTINGS.min_net_reward_risk,
+        imbalance: metrics.imbalance,
+        acceleration,
+        spread: metrics.spread,
+        freshness: metrics.freshness,
+        absorption_matched: absorption.matched_ratio,
+        btc_trend: trend.direction.clone(),
+    };
+    state.record_setup(setup_analysis, rejected_by_rr);
+    if rejected_by_rr {
         state.pending_signals.remove(symbol);
-        let reason = format!("after-cost R/R {net_rr:.2}");
         state.reject(symbol, &reason);
         state.diagnose(
             symbol,
@@ -1025,6 +1071,7 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
     let empty = VecDeque::new();
     let ticks = state.trades.get(symbol).unwrap_or(&empty);
     let metrics = book_metrics(book, ticks, now);
+    state.update_virtual_outcomes(symbol, metrics.bid, metrics.ask, now);
 
     // Wall tracking needs split borrows: books/trades read-only, tracks mutable.
     let (bid_absorption, ask_absorption) = {

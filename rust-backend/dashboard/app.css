@@ -107,6 +107,20 @@ td { padding: 1rem 1.5rem; border-top: 1px solid var(--line); color: var(--text)
 .average-item b { display: block; margin-top: .25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .near-row { align-items: flex-start; }
 .near-row small { display: block; color: var(--muted); }
+.diagnostics-actions { display: flex; align-items: center; gap: .75rem; }
+.diagnostics-actions .secondary-button { padding: .55rem .75rem; }
+.setup-analysis { margin-top: 1.5rem; }
+.setup-analysis > h3 { margin: 0 0 .7rem; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.setup-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.setup-card { min-width: 0; padding: 1rem; background: var(--panel); }
+.setup-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.setup-card-head small { display: block; margin-top: .2rem; color: var(--muted); }
+.setup-decision { color: var(--bad); font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.setup-decision.entry { color: var(--good); }
+.setup-values { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin-top: 1rem; }
+.setup-values span { display: block; color: var(--muted); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
+.setup-values b { display: block; margin-top: .2rem; overflow-wrap: anywhere; font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.setup-outcome { margin: .8rem 0 0; padding-top: .8rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 
 @media (max-width: 980px) {
   .workspace { grid-template-columns: 1fr; }
@@ -117,6 +131,7 @@ td { padding: 1rem 1.5rem; border-top: 1px solid var(--line); color: var(--text)
   .funnel-step:nth-child(3) { border-right: 0; }
   .funnel-step:nth-last-child(-n+2) { border-bottom: 0; }
   .diagnostics-lower { grid-template-columns: 1fr; }
+  .setup-list { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {

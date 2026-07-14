@@ -50,7 +50,7 @@
     </section>
 
     <section class="panel diagnostics-panel" aria-labelledby="diagnostics-title">
-      <div class="panel-head"><div><p class="eyebrow">ДИАГНОСТИКА / 60 МИНУТ</p><h2 id="diagnostics-title">Воронка сигналов</h2></div><span id="diagnostics-events" class="counter">00 СОБЫТИЙ</span></div>
+      <div class="panel-head"><div><p class="eyebrow">ДИАГНОСТИКА / 60 МИНУТ</p><h2 id="diagnostics-title">Воронка сигналов</h2></div><div class="diagnostics-actions"><span id="diagnostics-events" class="counter">00 СОБЫТИЙ</span><button id="diagnostics-export" class="secondary-button" type="button">Скачать JSON</button></div></div>
       <div id="diagnostics-empty" class="empty-block">Статистика накопится после запуска обновлённого движка.</div>
       <div id="diagnostics-content" class="diagnostics-content" hidden>
         <div id="diagnostics-stages" class="funnel-grid"></div>
@@ -59,6 +59,7 @@
           <section><h3>Средние значения</h3><div id="diagnostics-averages" class="average-grid"></div></section>
           <section><h3>Ближайшие кандидаты</h3><div id="diagnostics-near" class="near-list"></div></section>
         </div>
+        <section class="setup-analysis"><h3>Геометрия последних сетапов</h3><div id="setup-analysis-list" class="setup-list"><div class="empty-block">Завершённых сетапов пока нет.</div></div></section>
       </div>
     </section>
 

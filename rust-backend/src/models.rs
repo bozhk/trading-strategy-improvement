@@ -116,7 +116,7 @@ pub struct Position {
     pub last_status_log: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClosedTrade {
     pub symbol: String,
     pub side: &'static str,
@@ -133,6 +133,62 @@ pub struct ClosedTrade {
     pub mae: f64,
     pub signal_snapshot: Value,
     pub exit_snapshot: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SetupAnalysis {
+    pub id: u64,
+    pub timestamp: f64,
+    pub symbol: String,
+    pub side: String,
+    pub decision: String,
+    pub reason: String,
+    pub wall: f64,
+    pub breakout_price: f64,
+    pub retest_price: f64,
+    pub entry: f64,
+    pub stop: f64,
+    pub target: f64,
+    pub stop_pct: f64,
+    pub target_pct: f64,
+    pub gross_rr: f64,
+    pub cost_pct: f64,
+    pub net_rr: f64,
+    pub required_net_rr: f64,
+    pub score: i64,
+    pub score_required: i64,
+    pub score_breakdown: Value,
+    pub filter_actual: f64,
+    pub filter_required: f64,
+    pub filter_gap: f64,
+    pub imbalance: f64,
+    pub acceleration: f64,
+    pub spread: f64,
+    pub freshness: f64,
+    pub absorption_matched: f64,
+    pub btc_trend: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VirtualOutcome {
+    pub setup_id: u64,
+    pub symbol: String,
+    pub side: String,
+    pub started_at: f64,
+    pub expires_at: f64,
+    pub entry: f64,
+    pub stop: f64,
+    pub target: f64,
+    pub last_price: f64,
+    pub mfe_pct: f64,
+    pub mae_pct: f64,
+    pub outcome: String,
+    pub resolved_at: Option<f64>,
+    pub price_30s: Option<f64>,
+    pub price_1m: Option<f64>,
+    pub price_3m: Option<f64>,
+    pub price_5m: Option<f64>,
+    pub price_15m: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

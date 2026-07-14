@@ -150,6 +150,34 @@ async fn put_settings(
     ))
 }
 
+async fn export_diagnostics(
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+    if !admin_authorized(&headers) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Неверный пароль администратора"})),
+        ));
+    }
+    let payload = STATE.lock().diagnostics_export();
+    let body = serde_json::to_string_pretty(&payload).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+    })?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=diagnostics.json",
+            ),
+        ],
+        body,
+    ))
+}
+
 async fn restart_engine(headers: HeaderMap) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     if !admin_authorized(&headers) {
         return Err((
@@ -283,6 +311,7 @@ async fn main() {
         .route("/api/snapshot", get(snapshot))
         .route("/api/settings/status", get(settings_status))
         .route("/api/admin/settings", get(get_settings).put(put_settings))
+        .route("/api/admin/diagnostics/export", get(export_diagnostics))
         .route("/api/admin/restart", post(restart_engine))
         .layer(socketio_layer);
 

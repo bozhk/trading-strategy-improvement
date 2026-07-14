@@ -1,5 +1,6 @@
 use crate::models::{
-    now_ts, ClosedTrade, LogEvent, OrderBook, PendingSignal, Position, TradeTick, WallTrack,
+    now_ts, ClosedTrade, LogEvent, OrderBook, PendingSignal, Position, SetupAnalysis, TradeTick,
+    VirtualOutcome, WallTrack,
 };
 use crate::readiness::live_readiness;
 use parking_lot::Mutex;
@@ -13,6 +14,8 @@ const LOGS_MAXLEN: usize = 180;
 const DIAGNOSTICS_MAXLEN: usize = 20_000;
 const DIAGNOSTICS_WINDOW_SECONDS: f64 = 3_600.0;
 const BACKGROUND_DIAGNOSTIC_DEDUP_SECONDS: f64 = 10.0;
+const SETUP_ANALYSES_MAXLEN: usize = 2_000;
+const VIRTUAL_TRACK_SECONDS: f64 = 900.0;
 pub const BTC_HISTORY_MAXLEN: usize = 400;
 
 #[derive(Debug, Clone)]
@@ -41,6 +44,9 @@ pub struct MarketState {
     pub pending_signals: HashMap<String, PendingSignal>,
     pub reject_counts: HashMap<String, u64>,
     pub diagnostics: VecDeque<DiagnosticEvent>,
+    pub setup_analyses: VecDeque<SetupAnalysis>,
+    pub virtual_outcomes: VecDeque<VirtualOutcome>,
+    pub next_setup_id: u64,
     pub data_quality_errors: u64,
     pub btc_mid_history: VecDeque<(f64, f64)>,
     pub source: String,
@@ -145,6 +151,86 @@ impl MarketState {
             acceleration,
             spread,
         });
+    }
+
+    pub fn record_setup(&mut self, mut setup: SetupAnalysis, track_virtual: bool) {
+        self.next_setup_id = self.next_setup_id.saturating_add(1);
+        setup.id = self.next_setup_id;
+        if track_virtual {
+            self.virtual_outcomes.push_front(VirtualOutcome {
+                setup_id: setup.id,
+                symbol: setup.symbol.clone(),
+                side: setup.side.clone(),
+                started_at: setup.timestamp,
+                expires_at: setup.timestamp + VIRTUAL_TRACK_SECONDS,
+                entry: setup.entry,
+                stop: setup.stop,
+                target: setup.target,
+                last_price: setup.entry,
+                mfe_pct: 0.0,
+                mae_pct: 0.0,
+                outcome: "TRACKING".into(),
+                resolved_at: None,
+                price_30s: None,
+                price_1m: None,
+                price_3m: None,
+                price_5m: None,
+                price_15m: None,
+            });
+        }
+        if self.setup_analyses.len() >= SETUP_ANALYSES_MAXLEN {
+            self.setup_analyses.pop_back();
+        }
+        self.setup_analyses.push_front(setup);
+        while self.virtual_outcomes.len() > SETUP_ANALYSES_MAXLEN {
+            self.virtual_outcomes.pop_back();
+        }
+    }
+
+    pub fn update_virtual_outcomes(&mut self, symbol: &str, bid: f64, ask: f64, now: f64) {
+        if !bid.is_finite() || !ask.is_finite() || bid <= 0.0 || ask <= 0.0 {
+            return;
+        }
+        for outcome in self
+            .virtual_outcomes
+            .iter_mut()
+            .filter(|outcome| outcome.symbol == symbol && outcome.outcome == "TRACKING")
+        {
+            // Use the executable exit side, not mid-price, so virtual results include spread.
+            let price = if outcome.side == "LONG" { bid } else { ask };
+            outcome.last_price = price;
+            let elapsed = now - outcome.started_at;
+            let direction = if outcome.side == "LONG" { 1.0 } else { -1.0 };
+            let signed_return = (price - outcome.entry) / outcome.entry * direction * 100.0;
+            outcome.mfe_pct = outcome.mfe_pct.max(signed_return);
+            outcome.mae_pct = outcome.mae_pct.min(signed_return);
+            if elapsed >= 30.0 && outcome.price_30s.is_none() { outcome.price_30s = Some(price); }
+            if elapsed >= 60.0 && outcome.price_1m.is_none() { outcome.price_1m = Some(price); }
+            if elapsed >= 180.0 && outcome.price_3m.is_none() { outcome.price_3m = Some(price); }
+            if elapsed >= 300.0 && outcome.price_5m.is_none() { outcome.price_5m = Some(price); }
+            let target_hit = if outcome.side == "LONG" { price >= outcome.target } else { price <= outcome.target };
+            let stop_hit = if outcome.side == "LONG" { price <= outcome.stop } else { price >= outcome.stop };
+            if stop_hit || target_hit {
+                outcome.outcome = if stop_hit { "STOP_FIRST" } else { "TARGET_FIRST" }.into();
+                outcome.resolved_at = Some(now);
+            } else if now >= outcome.expires_at {
+                outcome.price_15m = Some(price);
+                outcome.outcome = "EXPIRED".into();
+                outcome.resolved_at = Some(now);
+            }
+        }
+    }
+
+    pub fn diagnostics_export(&self) -> Value {
+        json!({
+            "generated_at": now_ts(),
+            "window_note": "In-memory data since the last engine restart, bounded to 2000 setups",
+            "settings": crate::config::SETTINGS.clone(),
+            "funnel": self.snapshot()["signal_diagnostics"].clone(),
+            "setups": self.setup_analyses,
+            "paper_trades": self.closed,
+            "virtual_outcomes": self.virtual_outcomes,
+        })
     }
 
     pub fn snapshot(&self) -> Value {
@@ -317,6 +403,14 @@ impl MarketState {
                     "score": event.score, "imbalance": event.imbalance,
                     "acceleration": event.acceleration, "spread": event.spread,
                 })).collect::<Vec<_>>(),
+            },
+            "setup_analysis": {
+                "total": self.setup_analyses.len(),
+                "tracking": self.virtual_outcomes.iter().filter(|item| item.outcome == "TRACKING").count(),
+                "target_first": self.virtual_outcomes.iter().filter(|item| item.outcome == "TARGET_FIRST").count(),
+                "stop_first": self.virtual_outcomes.iter().filter(|item| item.outcome == "STOP_FIRST").count(),
+                "latest": self.setup_analyses.iter().take(8).collect::<Vec<_>>(),
+                "outcomes": self.virtual_outcomes.iter().take(8).collect::<Vec<_>>(),
             },
             "closed_trades": closed.iter().take(40).map(|t| json!({
                 "symbol": t.symbol, "side": t.side, "entry": t.entry, "exit": t.exit,
