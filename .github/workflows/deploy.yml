@@ -24,13 +24,23 @@ jobs:
       with:
         workspaces: "rust-backend -> target"
 
-    # 4. Собираем бинарник под Linux (здесь сервера GitHub жарят на полную мощность!)
+    # 4. Собираем бинарник под Linux
     - name: Build Release Binary
       run: |
         cd rust-backend
         cargo build --release
 
-    # 5. Перекидываем готовый скомпилированный файл на твой сервер Vultr
+    # 5. Останавливаем PM2 перед копированием, чтобы разблокировать файл на сервере
+    - name: Stop PM2 on Vultr
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: root
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          pm2 stop pulsebook-backend || true
+
+    # 6. Перекидываем готовый скомпилированный файл на твой сервер Vultr
     - name: Deploy to Vultr via SCP
       uses: appleboy/scp-action@master
       with:
@@ -39,3 +49,13 @@ jobs:
         key: ${{ secrets.SERVER_SSH_KEY }}
         source: "rust-backend/target/release/pulsebook"
         target: "/root/trading-strategy-improvement/"
+
+    # 7. Запускаем PM2 обратно с новыми изменениями
+    - name: Start PM2 on Vultr
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: root
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          pm2 start pulsebook-backend --update-env || pm2 restart pulsebook-backend --update-env
