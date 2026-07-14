@@ -17,7 +17,7 @@
 
   <main id="main" class="shell">
     <section class="intro" aria-labelledby="page-title">
-      <div><p class="eyebrow">СИСТЕМА / ТЕЛЕМЕТРИЯ</p><h1 id="page-title">Пастинг под контролем.<br><span>Только значимые сигналы.</span></h1></div>
+      <div><p class="eyebrow">СИСТЕМА / ТЕЛЕМЕТРИЯ</p><h1 id="page-title">Рынок под контролем.<br><span>Только значимые сигналы.</span></h1></div>
       <div class="intro-meta"><p>Отслеживание поглощения, пробоя и ретеста по активной группе инструментов. Реальная торговля жёстко заблокирована.</p><div class="meta-row"><span>ДВИЖОК <b>RUST</b></span><span>РЕЖИМ <b id="mode">PAPER</b></span><span>СЕССИЯ <b id="session">—</b></span><span>МОНЕТ <b id="symbols-count">—</b></span></div></div>
     </section>
 
@@ -33,7 +33,7 @@
     <section class="workspace">
       <div class="primary-column">
         <section class="panel radar-panel" aria-labelledby="radar-title">
-          <div class="panel-head"><div><p class="eyebrow">АКТИВНАЯ ГРУППА</p><h2 id="radar-title">Рыночный радар</h2></div><span id="source-badge" class="badge">SOURCE —</span></div>
+          <div class="panel-head"><div><p class="eyebrow">АКТИВНАЯ ГРУППА</p><h2 id="radar-title">Рыночный радар</h2></div><span id="source-badge" class="badge">ИСТОЧНИК —</span></div>
           <div class="table-wrap"><table><thead><tr><th>Инструмент</th><th>Цена</th><th>Спред</th><th>Поток</th><th>Сигнал</th></tr></thead><tbody id="radar-body"><tr><td colspan="5" class="empty">Ожидание рыночных данных…</td></tr></tbody></table></div>
         </section>
 
@@ -50,14 +50,14 @@
     </section>
 
     <section class="panel trades-panel" aria-labelledby="trades-title">
-      <div class="panel-head"><div><p class="eyebrow">NСТОРИЯ</p><h2 id="trades-title">Последние закрытые сделки</h2></div><span id="last-update">Нет синхронизации</span></div>
+      <div class="panel-head"><div><p class="eyebrow">ИСТОРИЯ</p><h2 id="trades-title">Последние закрытые сделки</h2></div><span id="last-update">Нет синхронизации</span></div>
       <div class="table-wrap"><table><thead><tr><th>Закрыто</th><th>Инструмент</th><th>Сторона</th><th>Вход → Выход</th><th>Результат</th><th>Причина</th></tr></thead><tbody id="trades-body"><tr><td colspan="6" class="empty">В этой сессии нет закрытых сделок.</td></tr></tbody></table></div>
     </section>
   </main>
   <dialog id="settings-dialog" class="settings-dialog">
     <div class="settings-shell">
       <header class="settings-header"><div><p class="eyebrow">ЦЕНТР УПРАВЛЕНИЯ</p><h2>Настройки движка</h2><p class="muted">Все значения сохраняются в JSON и применяются после перезапуска.</p></div><button id="settings-close" class="secondary-button" type="button">Закрыть</button></header>
-      <section id="auth-panel" class="auth-panel"><label for="admin-password">Пароль администратора</label><div class="auth-row"><input id="admin-password" type="password" autocomplete="current-password" placeholder="Введите пароль"><button id="settings-login" class="primary-button" type="button">Войти</button></div><p class="help">Задайте <code>PULSEBOOK_ADMIN_PASSWORD</code> длиной не менее 12 символов. На публичном сервере обязательно используйте HTTPS.</p></section>
+      <section id="auth-panel" class="auth-panel"><label for="admin-password">Пароль администратора</label><div class="auth-row"><input id="admin-password" type="password" autocomplete="current-password" placeholder="Введите пароль"><button id="settings-login" class="primary-button" type="button">Войти</button></div><p class="help">Введите пароль администратора. На публичном сервере обязательно используйте HTTPS: по обычному HTTP пароль передаётся в открытом виде.</p></section>
       <section id="settings-workspace" hidden><nav id="settings-nav" class="settings-nav" aria-label="Разделы настроек"></nav><div id="settings-summary" class="settings-summary"></div><form id="settings-form"><div id="settings-groups" class="settings-groups"></div></form><footer class="settings-actions"><p id="settings-message" role="status"></p><button id="settings-reset" class="secondary-button" type="button">Сбросить изменения</button><button class="primary-button" type="submit" form="settings-form">Сохранить</button><button id="settings-restart" class="danger-button" type="button" hidden>Перезапустить движок</button></footer></section>
     </div>
   </dialog>
