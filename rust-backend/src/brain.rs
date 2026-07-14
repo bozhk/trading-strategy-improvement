@@ -972,7 +972,7 @@ fn attempt_entry(
         spread: metrics.spread,
         freshness: metrics.freshness,
         absorption_matched: absorption.matched_ratio,
-        btc_trend: trend.direction.clone(),
+        btc_trend: trend.direction.to_string(),
     };
     state.record_setup(setup_analysis, rejected_by_rr);
     if rejected_by_rr {
