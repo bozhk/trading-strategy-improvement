@@ -158,6 +158,7 @@ impl MarketState {
             "last_scan": self.last_scan,
             "uptime": now_ts() - self.started_at,
             "session": self.session,
+            "mode": crate::config::SETTINGS.trading_mode.clone(),
             "stats": {
                 "pnl": realized + unrealized,
                 "realized": realized,
