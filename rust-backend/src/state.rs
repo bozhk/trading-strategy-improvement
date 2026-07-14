@@ -12,6 +12,7 @@ const CLOSED_MAXLEN: usize = 1000;
 const LOGS_MAXLEN: usize = 180;
 const DIAGNOSTICS_MAXLEN: usize = 20_000;
 const DIAGNOSTICS_WINDOW_SECONDS: f64 = 3_600.0;
+const BACKGROUND_DIAGNOSTIC_DEDUP_SECONDS: f64 = 10.0;
 pub const BTC_HISTORY_MAXLEN: usize = 400;
 
 #[derive(Debug, Clone)]
@@ -116,6 +117,20 @@ impl MarketState {
             .unwrap_or(false)
         {
             self.diagnostics.pop_front();
+        }
+        // Rejections without a score are background scanner checks, not setup
+        // transitions. Sampling the same symbol/reason every loop filled an hour-long
+        // buffer in minutes and made the funnel misleading.
+        if stage == "rejected" && score.is_none() {
+            let duplicate = self.diagnostics.iter().rev().any(|event| {
+                now - event.timestamp <= BACKGROUND_DIAGNOSTIC_DEDUP_SECONDS
+                    && event.symbol == symbol
+                    && event.stage == stage
+                    && event.reason.as_deref() == reason
+            });
+            if duplicate {
+                return;
+            }
         }
         if self.diagnostics.len() >= DIAGNOSTICS_MAXLEN {
             self.diagnostics.pop_front();
@@ -359,6 +374,23 @@ mod tests {
             .diagnostics
             .iter()
             .all(|event| event.symbol != "OLDUSDT"));
+    }
+
+    #[test]
+    fn repeated_background_rejections_are_deduplicated() {
+        let mut state = MarketState::new();
+        for _ in 0..100 {
+            state.diagnose(
+                "BTCUSDT",
+                "rejected",
+                Some("low imbalance"),
+                None,
+                Some(0.5),
+                None,
+                Some(0.01),
+            );
+        }
+        assert_eq!(state.diagnostics.len(), 1);
     }
 
     #[test]
