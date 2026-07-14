@@ -105,12 +105,18 @@ fn admin_authorized(headers: &HeaderMap) -> bool {
 }
 
 async fn settings_status() -> Json<Value> {
+    // A single guard: nested STATE.lock() calls inside one expression
+    // deadlock because parking_lot mutexes are not reentrant.
+    let (source, active_symbols, selected_symbols) = {
+        let state = STATE.lock();
+        (state.source.clone(), state.books.len(), state.radar.len())
+    };
     Json(json!({
         "configured": admin_password().is_some(),
         "mode": SETTINGS.trading_mode,
-        "source": STATE.lock().source,
-        "active_symbols": STATE.lock().books.len(),
-        "selected_symbols": STATE.lock().radar.len(),
+        "source": source,
+        "active_symbols": active_symbols,
+        "selected_symbols": selected_symbols,
         "max_symbols": SETTINGS.max_symbols,
         "config_path": config::config_path().display().to_string(),
         "live_trading_locked": true
