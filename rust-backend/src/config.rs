@@ -81,6 +81,12 @@ pub struct Settings {
     pub min_live_expectancy: f64,
     pub max_live_drawdown_pct: f64,
     pub demo_symbols: Vec<String>,
+
+    // Optional bounded raw market-data recorder.
+    pub record_raw_events: bool,
+    pub raw_events_dir: String,
+    pub raw_segment_bytes: u64,
+    pub raw_disk_budget_bytes: u64,
 }
 
 impl Default for Settings {
@@ -140,6 +146,10 @@ impl Settings {
             .into_iter()
             .map(str::to_string)
             .collect(),
+            record_raw_events: env_bool("RECORD_RAW_EVENTS", false),
+            raw_events_dir: env_str("RAW_EVENTS_DIR", "./data/raw"),
+            raw_segment_bytes: env_u64("RAW_SEGMENT_BYTES", 64 * 1024 * 1024),
+            raw_disk_budget_bytes: env_u64("RAW_DISK_BUDGET_BYTES", 4 * 1024 * 1024 * 1024),
         }
     }
 

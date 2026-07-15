@@ -4,6 +4,7 @@ mod detail;
 mod execution;
 mod models;
 mod readiness;
+mod recorder;
 mod replay;
 mod scanner;
 mod state;
@@ -295,6 +296,7 @@ async fn engine_loop() {
 async fn main() {
     tracing_subscriber::fmt().init();
     SETTINGS.assert_safe_mode();
+    recorder::init();
 
     let (socketio_layer, io) = SocketIo::new_layer();
     io.ns("/", on_connect);

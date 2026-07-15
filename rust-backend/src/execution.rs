@@ -1,5 +1,57 @@
 use crate::config::SETTINGS;
-use crate::models::Side;
+use crate::models::{OrderBook, Side};
+
+#[derive(Debug, Clone, Copy)]
+pub struct BookFill {
+    pub price: f64,
+    pub quantity: f64,
+    pub fee: f64,
+    pub slippage_cost: f64,
+}
+
+/// Conservatively fills the whole requested quantity against the currently
+/// visible L2 book. Returns None instead of assuming liquidity beyond depth 50.
+pub fn book_fill(
+    book: &OrderBook,
+    side: Side,
+    quantity: f64,
+    is_entry: bool,
+) -> Option<BookFill> {
+    if !quantity.is_finite() || quantity <= 0.0 {
+        return None;
+    }
+    let buy = if is_entry { side == Side::LONG } else { side == Side::SHORT };
+    let levels: Vec<(f64, f64)> = if buy {
+        book.asks.iter().map(|(price, size)| (price.0, *size)).collect()
+    } else {
+        book.bids
+            .iter()
+            .rev()
+            .map(|(price, size)| (price.0, *size))
+            .collect()
+    };
+    let touch = levels.first()?.0;
+    let mut remaining = quantity;
+    let mut notional = 0.0;
+    for (price, available) in levels {
+        let filled = remaining.min(available.max(0.0));
+        notional += price * filled;
+        remaining -= filled;
+        if remaining <= quantity * 1e-12 {
+            break;
+        }
+    }
+    if remaining > quantity * 1e-12 {
+        return None;
+    }
+    let price = notional / quantity;
+    Some(BookFill {
+        price,
+        quantity,
+        fee: notional * SETTINGS.taker_fee_pct,
+        slippage_cost: (price - touch).abs() * quantity,
+    })
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
@@ -76,8 +128,36 @@ mod tests {
     fn flat_round_trip_is_a_net_loss() {
         let entry = entry_fill(Side::LONG, 100.0, 100.05, 2.0);
         let exit = exit_fill(Side::LONG, 100.0, 100.05, 2.0);
-        let (_, net) = trade_pnl(Side::LONG, entry.price, exit.price, 2.0, entry.fee, exit.fee);
+        let (_, net) = trade_pnl(
+            Side::LONG,
+            entry.price,
+            exit.price,
+            2.0,
+            entry.fee,
+            exit.fee,
+        );
         assert!(net < 0.0, "crossing the spread twice must cost money");
+    }
+
+    #[test]
+    fn book_fill_uses_visible_depth_vwap() {
+        let mut book = OrderBook::default();
+        book.apply(
+            "snapshot",
+            &[(100.0, 2.0)],
+            &[(100.1, 1.0), (100.2, 2.0)],
+            1,
+        );
+        let fill = book_fill(&book, Side::LONG, 2.0, true).unwrap();
+        assert!((fill.price - 100.15).abs() < 1e-9);
+        assert!(fill.slippage_cost > 0.0);
+    }
+
+    #[test]
+    fn book_fill_rejects_partial_visible_depth() {
+        let mut book = OrderBook::default();
+        book.apply("snapshot", &[(100.0, 1.0)], &[(100.1, 1.0)], 1);
+        assert!(book_fill(&book, Side::LONG, 2.0, true).is_none());
     }
 
     #[test]

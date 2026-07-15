@@ -1,7 +1,37 @@
 //! Deterministic, event-time replay with explicit walk-forward folds.
 #![allow(dead_code)]
 
+use serde::Deserialize;
 use serde_json::Value;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecordedEvent {
+    pub kind: String,
+    pub symbol: String,
+    pub exchange_timestamp: f64,
+    pub local_receive_timestamp: f64,
+    pub sequence: i64,
+    pub payload: Value,
+}
+
+impl From<RecordedEvent> for ReplayEvent {
+    fn from(event: RecordedEvent) -> Self {
+        Self {
+            timestamp: event.exchange_timestamp,
+            sequence: event.sequence,
+            symbol: event.symbol,
+            kind: event.kind,
+            payload: event.payload,
+        }
+    }
+}
+
+pub fn parse_recorded_jsonl(raw: &str) -> Result<Vec<ReplayEvent>, serde_json::Error> {
+    raw.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<RecordedEvent>(line).map(Into::into))
+        .collect()
+}
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -22,24 +52,34 @@ pub struct ReplayEngine<F: FnMut(&ReplayEvent)> {
 
 impl<F: FnMut(&ReplayEvent)> ReplayEngine<F> {
     pub fn new(handler: F) -> Self {
-        Self { handler, now: 0.0, last_sequence: HashMap::new(), data_quality_errors: 0 }
+        Self {
+            handler,
+            now: 0.0,
+            last_sequence: HashMap::new(),
+            data_quality_errors: 0,
+        }
     }
 
     pub fn run(&mut self, events: Vec<ReplayEvent>) {
         let mut ordered = events;
         ordered.sort_by(|a, b| {
-            a.timestamp.total_cmp(&b.timestamp).then(a.sequence.cmp(&b.sequence))
+            a.timestamp
+                .total_cmp(&b.timestamp)
+                .then(a.sequence.cmp(&b.sequence))
         });
         for event in &ordered {
             // Event time is advanced before dispatch: the handler can only
             // see this event and previous events, never future rows.
             let previous = self.last_sequence.get(&event.symbol).copied().unwrap_or(-1);
-            if event.sequence <= previous || event.timestamp < self.now {
+            let stale_sequence = event.sequence > 0 && event.sequence <= previous;
+            if stale_sequence || event.timestamp < self.now {
                 self.data_quality_errors += 1;
                 continue;
             }
             self.now = event.timestamp;
-            self.last_sequence.insert(event.symbol.clone(), event.sequence);
+            if event.sequence > 0 {
+                self.last_sequence.insert(event.symbol.clone(), event.sequence);
+            }
             (self.handler)(event);
         }
     }
@@ -51,7 +91,11 @@ pub fn walk_forward(
     folds: usize,
 ) -> Result<Vec<(Vec<ReplayEvent>, Vec<ReplayEvent>)>, String> {
     let mut rows: Vec<ReplayEvent> = events.to_vec();
-    rows.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp).then(a.sequence.cmp(&b.sequence)));
+    rows.sort_by(|a, b| {
+        a.timestamp
+            .total_cmp(&b.timestamp)
+            .then(a.sequence.cmp(&b.sequence))
+    });
     if folds < 2 || rows.len() < folds {
         return Err("walk-forward requires at least two non-empty folds".into());
     }
@@ -59,8 +103,15 @@ pub fn walk_forward(
     let mut result = Vec::new();
     for index in 1..folds {
         let train_end = size * index;
-        let test_end = if index == folds - 1 { rows.len() } else { size * (index + 1) };
-        result.push((rows[..train_end].to_vec(), rows[train_end..test_end].to_vec()));
+        let test_end = if index == folds - 1 {
+            rows.len()
+        } else {
+            size * (index + 1)
+        };
+        result.push((
+            rows[..train_end].to_vec(),
+            rows[train_end..test_end].to_vec(),
+        ));
     }
     Ok(result)
 }
@@ -85,7 +136,11 @@ mod tests {
         let mut seen = Vec::new();
         {
             let mut engine = ReplayEngine::new(|e: &ReplayEvent| seen.push(e.timestamp));
-            engine.run(vec![event(3.0, 3, "A"), event(1.0, 1, "A"), event(2.0, 2, "A")]);
+            engine.run(vec![
+                event(3.0, 3, "A"),
+                event(1.0, 1, "A"),
+                event(2.0, 2, "A"),
+            ]);
             assert_eq!(engine.data_quality_errors, 0);
         }
         assert_eq!(seen, vec![1.0, 2.0, 3.0]);
@@ -95,22 +150,41 @@ mod tests {
     fn stale_sequences_count_as_data_quality_errors() {
         let mut count = 0;
         let mut engine = ReplayEngine::new(|_| count += 1);
-        engine.run(vec![event(1.0, 5, "A"), event(2.0, 4, "A"), event(3.0, 6, "A")]);
+        engine.run(vec![
+            event(1.0, 5, "A"),
+            event(2.0, 4, "A"),
+            event(3.0, 6, "A"),
+        ]);
         assert_eq!(engine.data_quality_errors, 1);
         assert_eq!(count, 2);
     }
 
     #[test]
     fn walk_forward_folds_never_overlap() {
-        let events: Vec<ReplayEvent> =
-            (0..40).map(|i| event(i as f64, i as i64, "A")).collect();
+        let events: Vec<ReplayEvent> = (0..40).map(|i| event(i as f64, i as i64, "A")).collect();
         let folds = walk_forward(&events, 4).unwrap();
         assert_eq!(folds.len(), 3);
         for (train, test) in &folds {
             let train_max = train.iter().map(|e| e.timestamp).fold(f64::MIN, f64::max);
             let test_min = test.iter().map(|e| e.timestamp).fold(f64::MAX, f64::min);
-            assert!(train_max < test_min, "test folds must be strictly after training data");
+            assert!(
+                train_max < test_min,
+                "test folds must be strictly after training data"
+            );
         }
+    }
+
+    #[test]
+    fn recorded_jsonl_replays_deterministically() {
+        let raw = r#"{"kind":"orderbook","symbol":"BTCUSDT","exchange_timestamp":2.0,"local_receive_timestamp":2.1,"sequence":2,"payload":{}}
+{"kind":"orderbook","symbol":"BTCUSDT","exchange_timestamp":1.0,"local_receive_timestamp":1.1,"sequence":1,"payload":{}}"#;
+        let events = parse_recorded_jsonl(raw).unwrap();
+        let mut first = Vec::new();
+        ReplayEngine::new(|event: &ReplayEvent| first.push((event.timestamp, event.sequence))).run(events.clone());
+        let mut second = Vec::new();
+        ReplayEngine::new(|event: &ReplayEvent| second.push((event.timestamp, event.sequence))).run(events);
+        assert_eq!(first, second);
+        assert_eq!(first, vec![(1.0, 1), (2.0, 2)]);
     }
 
     #[test]
