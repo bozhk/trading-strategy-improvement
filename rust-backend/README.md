@@ -97,6 +97,7 @@ RISK_PER_TRADE_PCT=0.0025 # риск на сделку (0.25%)
 # Telegram (необязательно)
 TELEGRAM_BOT_TOKEN=123456:replace-with-token
 TELEGRAM_CHAT_ID=-1001234567890
+TELEGRAM_MENTION=@ananasec              # кого упоминать в уведомлениях
 TELEGRAM_THREAD_ID=123                 # только для topic в forum-группе
 TELEGRAM_NOTIFY_REJECTIONS=true
 TELEGRAM_REJECT_SUMMARY_SECONDS=300    # одна сводка отказов каждые 5 минут
@@ -125,6 +126,7 @@ environment перезапустите процесс с `--update-env`.
 Бот отправляет открытия и закрытия сразу. Отклонения агрегируются по символу и
 причине, затем отправляются одной сводкой. Это защищает группу и Telegram API от
 тысяч одинаковых сообщений. Ошибки Telegram не блокируют торговый цикл.
+Каждое уведомление начинается с `@ananasec`, чтобы Telegram отправлял push-уведомление.
 
 Пример настройки для PM2 на сервере. Файл должен быть доступен только root:
 
@@ -133,6 +135,7 @@ sudo install -m 600 /dev/null /opt/pulsebook/pulsebook.env
 sudo sh -c 'printf "%s\n" \
   "TELEGRAM_BOT_TOKEN=123456:replace-with-token" \
   "TELEGRAM_CHAT_ID=-1001234567890" \
+  "TELEGRAM_MENTION=@ananasec" \
   "TELEGRAM_REJECT_SUMMARY_SECONDS=300" \
   > /opt/pulsebook/pulsebook.env'
 

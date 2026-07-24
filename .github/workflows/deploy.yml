@@ -66,6 +66,7 @@ jobs:
           printf '%s\n' \
             "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" \
             "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID" \
+            "TELEGRAM_MENTION=@ananasec" \
             "TELEGRAM_THREAD_ID=$TELEGRAM_THREAD_ID" \
             "TELEGRAM_NOTIFY_REJECTIONS=true" \
             "TELEGRAM_REJECT_SUMMARY_SECONDS=300" \

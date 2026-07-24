@@ -13,6 +13,7 @@ const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
 struct TelegramConfig {
     token: String,
     chat_id: String,
+    mention: String,
     thread_id: Option<i64>,
     rejection_summary_seconds: u64,
     notify_rejections: bool,
@@ -30,6 +31,11 @@ impl TelegramConfig {
         Some(Self {
             token,
             chat_id,
+            mention: env::var("TELEGRAM_MENTION")
+                .ok()
+                .map(|value| normalize_mention(&value))
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "@ananasec".to_string()),
             thread_id: env::var("TELEGRAM_THREAD_ID")
                 .ok()
                 .and_then(|value| value.trim().parse().ok()),
@@ -220,7 +226,7 @@ async fn send_message(client: &Client, config: &TelegramConfig, text: &str) {
     let endpoint = format!("https://api.telegram.org/bot{}/sendMessage", config.token);
     let mut payload = json!({
         "chat_id": config.chat_id,
-        "text": truncate(text, TELEGRAM_MESSAGE_LIMIT),
+        "text": truncate(&format!("{} {}", config.mention, text), TELEGRAM_MESSAGE_LIMIT),
         "disable_web_page_preview": true,
     });
     if let Some(thread_id) = config.thread_id {
@@ -258,6 +264,18 @@ fn truncate(value: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     value[..end].to_string()
+}
+
+fn normalize_mention(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return String::new();
+    }
+    if value.starts_with('@') {
+        value.to_string()
+    } else {
+        format!("@{value}")
+    }
 }
 
 pub struct EntryNotification<'a> {
@@ -298,5 +316,12 @@ mod tests {
     #[test]
     fn short_text_is_not_changed() {
         assert_eq!(truncate("BTCUSDT", 32), "BTCUSDT");
+    }
+
+    #[test]
+    fn mention_is_normalized_for_telegram() {
+        assert_eq!(normalize_mention("ananasec"), "@ananasec");
+        assert_eq!(normalize_mention(" @ananasec "), "@ananasec");
+        assert_eq!(normalize_mention(""), "");
     }
 }
