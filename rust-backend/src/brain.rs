@@ -32,9 +32,6 @@ const ENTRY_IMBALANCE_SHORT: f64 = 0.45;
 const ENTRY_BREAKOUT_TOLERANCE_PCT: f64 = 0.0002;
 
 // Exit management: opposing tape must persist for N consecutive ticks.
-const REVERSAL_CONFIRM_TICKS: u32 = 3;
-const REVERSAL_GRACE_SECONDS: f64 = 3.0;
-
 const POSITION_STATUS_LOG_SECONDS: f64 = 5.0;
 const ACCELERATION_CAP: f64 = 1_000_000.0;
 
@@ -51,6 +48,12 @@ fn loss_streak_pause_until(
         .take(max_losses)
         .all(|(pnl, _)| *pnl < 0.0)
         .then(|| recent[0].1 + cooldown_seconds)
+}
+
+fn reversal_is_confirmed(streak: u32, reversal_started_at: f64, opened_at: f64, now: f64) -> bool {
+    streak >= SETTINGS.reversal_confirm_ticks
+        && now - opened_at >= SETTINGS.reversal_min_hold_seconds
+        && now - reversal_started_at >= SETTINGS.reversal_confirm_seconds
 }
 
 #[derive(Debug, Clone, Default)]
@@ -516,6 +519,8 @@ fn open_position(
         return false;
     }
     let fill = entry_fill(side, bid, ask, quantity);
+    let actual_risk = loss_per_unit * quantity;
+    let notional = fill.price * quantity;
     state.positions.insert(
         symbol.to_string(),
         Position {
@@ -538,6 +543,7 @@ fn open_position(
             mfe: 0.0,
             mae: 0.0,
             reversal_streak: 0,
+            reversal_started_at: 0.0,
             last_status_log: now,
         },
     );
@@ -547,11 +553,12 @@ fn open_position(
         format!(" · {context}")
     };
     let message = format!(
-        "Paper {} @ {:.6} · stop {:.6} · target {:.6} · risk {:.2} USDT{detail}",
+        "Paper {} @ {:.6} · stop {:.6} · target {:.6} · risk-to-stop {:.2} / budget {:.2} USDT{detail}",
         side.as_str(),
         fill.price,
         stop_price,
         target_price,
+        actual_risk,
         risk_budget,
     );
     state.log("ENTRY", &message, symbol, 0.0);
@@ -560,9 +567,11 @@ fn open_position(
         side: side.as_str(),
         entry: fill.price,
         quantity,
+        notional,
         stop: stop_price,
         target: target_price,
         risk_budget,
+        actual_risk,
         net_rr: state.positions[symbol].signal_snapshot["net_rr"]
             .as_f64()
             .unwrap_or(0.0),
@@ -731,14 +740,21 @@ fn manage_position(
 
     let tape_reversed = (pos.side == Side::Long && metrics.tape.sell_accelerating)
         || (pos.side == Side::Short && metrics.tape.buy_accelerating);
-    pos.reversal_streak = if tape_reversed {
-        pos.reversal_streak + 1
+    if tape_reversed {
+        if pos.reversal_streak == 0 {
+            pos.reversal_started_at = now;
+        }
+        pos.reversal_streak += 1;
     } else {
-        0
-    };
-    if pos.reversal_streak >= REVERSAL_CONFIRM_TICKS
-        && now - pos.opened_at >= REVERSAL_GRACE_SECONDS
-    {
+        pos.reversal_streak = 0;
+        pos.reversal_started_at = 0.0;
+    }
+    if reversal_is_confirmed(
+        pos.reversal_streak,
+        pos.reversal_started_at,
+        pos.opened_at,
+        now,
+    ) {
         let detail = format!("opposing tape persisted {} ticks", pos.reversal_streak);
         close_position(
             state,
@@ -1189,7 +1205,7 @@ pub async fn brain_loop() {
 
 #[cfg(test)]
 mod tests {
-    use super::loss_streak_pause_until;
+    use super::{loss_streak_pause_until, reversal_is_confirmed};
 
     #[test]
     fn loss_streak_breaker_has_a_finite_pause() {
@@ -1201,5 +1217,12 @@ mod tests {
     fn a_win_breaks_the_loss_streak() {
         let recent = vec![(-1.0, 100.0), (2.0, 90.0), (-1.0, 80.0), (-3.0, 70.0)];
         assert_eq!(loss_streak_pause_until(&recent, 4, 600.0), None);
+    }
+
+    #[test]
+    fn reversal_needs_minimum_hold_and_continuous_time() {
+        assert!(!reversal_is_confirmed(3, 10.0, 0.0, 12.0));
+        assert!(!reversal_is_confirmed(3, 29.0, 0.0, 31.0));
+        assert!(reversal_is_confirmed(3, 10.0, 0.0, 40.0));
     }
 }

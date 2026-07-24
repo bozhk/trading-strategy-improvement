@@ -150,6 +150,7 @@ pub struct Position {
     pub mfe: f64,
     pub mae: f64,
     pub reversal_streak: u32,
+    pub reversal_started_at: f64,
     pub last_status_log: f64,
 }
 

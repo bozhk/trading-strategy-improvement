@@ -61,6 +61,9 @@ const ADMIN_SETTING_KEYS: &[&str] = &[
     "trail_arm_r",
     "trail_giveback_r",
     "breakeven_arm_r",
+    "reversal_confirm_ticks",
+    "reversal_confirm_seconds",
+    "reversal_min_hold_seconds",
     "signal_expiry_seconds",
     "retest_tolerance_pct",
     "retest_hold_ticks",
@@ -129,6 +132,9 @@ pub struct Settings {
     pub trail_arm_r: f64,
     pub trail_giveback_r: f64,
     pub breakeven_arm_r: f64,
+    pub reversal_confirm_ticks: u32,
+    pub reversal_confirm_seconds: f64,
+    pub reversal_min_hold_seconds: f64,
 
     // Portfolio circuit breakers.
     pub account_equity: f64,
@@ -185,6 +191,9 @@ impl Settings {
             trail_arm_r: 1.0,
             trail_giveback_r: 0.55,
             breakeven_arm_r: 0.8,
+            reversal_confirm_ticks: env_u64("REVERSAL_CONFIRM_TICKS", 3) as u32,
+            reversal_confirm_seconds: env_f64("REVERSAL_CONFIRM_SECONDS", 3.0),
+            reversal_min_hold_seconds: env_f64("REVERSAL_MIN_HOLD_SECONDS", 30.0),
             account_equity: env_f64("ACCOUNT_EQUITY", env_f64("PAPER_EQUITY", 10_000.0)),
             risk_per_trade_pct: env_f64("RISK_PER_TRADE_PCT", 0.0025),
             max_position_notional: 1_000.0,
@@ -219,6 +228,12 @@ impl Settings {
             "TARGET_R_MULTIPLE must be greater than MIN_NET_REWARD_RISK > 0"
         );
         assert!(self.max_target_pct > 0.0, "MAX_TARGET_PCT must be positive");
+        assert!(
+            self.reversal_confirm_ticks > 0
+                && self.reversal_confirm_seconds > 0.0
+                && self.reversal_min_hold_seconds > 0.0,
+            "Reversal confirmation settings must be positive"
+        );
         assert!(
             self.max_holding_seconds > 0.0,
             "MAX_HOLDING_SECONDS must be positive"
@@ -275,6 +290,9 @@ impl Settings {
             "trail_arm_r": self.trail_arm_r,
             "trail_giveback_r": self.trail_giveback_r,
             "breakeven_arm_r": self.breakeven_arm_r,
+            "reversal_confirm_ticks": self.reversal_confirm_ticks,
+            "reversal_confirm_seconds": self.reversal_confirm_seconds,
+            "reversal_min_hold_seconds": self.reversal_min_hold_seconds,
             "signal_expiry_seconds": self.signal_expiry_seconds,
             "retest_tolerance_pct": self.retest_tolerance_pct,
             "retest_hold_ticks": self.retest_hold_ticks,

@@ -103,6 +103,9 @@ TELEGRAM_NOTIFY_REJECTIONS=true
 TELEGRAM_REJECT_SUMMARY_SECONDS=300    # одна сводка отказов каждые 5 минут
 TELEGRAM_NOTIFY_STARTUP=true
 ADMIN_PASSWORD=replace-with-dashboard-password
+REVERSAL_CONFIRM_TICKS=3
+REVERSAL_CONFIRM_SECONDS=3
+REVERSAL_MIN_HOLD_SECONDS=30
 
 # Пример: реальные данные Bybit на порту 9000
 DATA_MODE=real PORT=9000 ./target/release/pulsebook

@@ -95,14 +95,16 @@ pub fn start(trading_mode: &str) {
 
 pub fn notify_entry(event: EntryNotification<'_>) {
     let text = format!(
-        "ОТКРЫТА PAPER-СДЕЛКА\n\n{} {}\nВход: {:.6}\nКоличество: {:.6}\nСтоп: {:.6}\nЦель: {:.6}\nРиск: {:.2} USDT\nNet R/R: {:.2}\nЦель: {:.2}R",
+        "ОТКРЫТА PAPER-СДЕЛКА\n\n{} {}\nВход: {:.6}\nКоличество: {:.6}\nНоминал: {:.2} USDT\nСтоп: {:.6}\nЦель: {:.6}\nРиск-бюджет: {:.2} USDT\nРиск до стопа: {:.2} USDT\nNet R/R: {:.2}\nЦель: {:.2}R",
         event.symbol,
         event.side,
         event.entry,
         event.quantity,
+        event.notional,
         event.stop,
         event.target,
         event.risk_budget,
+        event.actual_risk,
         event.net_rr,
         event.target_r,
     );
@@ -283,9 +285,11 @@ pub struct EntryNotification<'a> {
     pub side: &'a str,
     pub entry: f64,
     pub quantity: f64,
+    pub notional: f64,
     pub stop: f64,
     pub target: f64,
     pub risk_budget: f64,
+    pub actual_risk: f64,
     pub net_rr: f64,
     pub target_r: f64,
 }
