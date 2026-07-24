@@ -7,6 +7,7 @@ use crate::models::{
     now_ts, Absorption, ClosedTrade, OrderBook, PendingSignal, Position, Side, TradeTick, WallTrack,
 };
 use crate::state::{MarketState, BTC_HISTORY_MAXLEN, STATE};
+use crate::telegram::{self, EntryNotification, ExitNotification};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -505,11 +506,13 @@ fn open_position(
     let stop_distance = (touch - stop_price).abs();
     let loss_per_unit = stop_loss_per_unit(side, bid, ask, stop_price);
     if stop_distance <= 0.0 || !loss_per_unit.is_finite() || loss_per_unit <= 0.0 {
+        state.reject(symbol, "invalid execution sizing");
         return false;
     }
     let risk_budget = SETTINGS.account_equity * SETTINGS.risk_per_trade_pct;
     let quantity = (risk_budget / loss_per_unit).min(SETTINGS.max_position_notional / touch);
     if !quantity.is_finite() || quantity <= 0.0 {
+        state.reject(symbol, "invalid execution sizing");
         return false;
     }
     let fill = entry_fill(side, bid, ask, quantity);
@@ -552,6 +555,21 @@ fn open_position(
         risk_budget,
     );
     state.log("ENTRY", &message, symbol, 0.0);
+    telegram::notify_entry(EntryNotification {
+        symbol,
+        side: side.as_str(),
+        entry: fill.price,
+        quantity,
+        stop: stop_price,
+        target: target_price,
+        risk_budget,
+        net_rr: state.positions[symbol].signal_snapshot["net_rr"]
+            .as_f64()
+            .unwrap_or(0.0),
+        target_r: state.positions[symbol].signal_snapshot["target_r"]
+            .as_f64()
+            .unwrap_or(SETTINGS.target_r_multiple),
+    });
     true
 }
 
@@ -613,6 +631,19 @@ fn close_position(
         pos.side.as_str(), pos.mfe, pos.mae,
     );
     state.log("EXIT", &message, &symbol, 0.0);
+    telegram::notify_exit(ExitNotification {
+        symbol: &symbol,
+        side: pos.side.as_str(),
+        reason,
+        entry: pos.entry,
+        exit: fill.price,
+        pnl,
+        gross_pnl: gross,
+        fees: total_fees,
+        held_seconds: held,
+        mfe: pos.mfe,
+        mae: pos.mae,
+    });
 }
 
 fn position_return(pos: &Position, mark: f64) -> f64 {

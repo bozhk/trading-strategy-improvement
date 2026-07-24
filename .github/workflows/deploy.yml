@@ -57,5 +57,27 @@ jobs:
         host: ${{ secrets.SERVER_HOST }}
         username: root
         key: ${{ secrets.SERVER_SSH_KEY }}
+        envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,TELEGRAM_THREAD_ID
         script: |
+          test -n "$TELEGRAM_BOT_TOKEN" || { echo "Missing TELEGRAM_BOT_TOKEN GitHub Secret"; exit 1; }
+          test -n "$TELEGRAM_CHAT_ID" || { echo "Missing TELEGRAM_CHAT_ID GitHub Secret"; exit 1; }
+
+          umask 077
+          printf '%s\n' \
+            "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" \
+            "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID" \
+            "TELEGRAM_THREAD_ID=$TELEGRAM_THREAD_ID" \
+            "TELEGRAM_NOTIFY_REJECTIONS=true" \
+            "TELEGRAM_REJECT_SUMMARY_SECONDS=300" \
+            "TELEGRAM_NOTIFY_STARTUP=true" \
+            > /root/trading-strategy-improvement/pulsebook.env
+          chmod 600 /root/trading-strategy-improvement/pulsebook.env
+
+          set -a
+          . /root/trading-strategy-improvement/pulsebook.env
+          set +a
           pm2 start pulsebook-backend --update-env || pm2 restart pulsebook-backend --update-env
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}

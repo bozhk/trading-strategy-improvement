@@ -2,6 +2,7 @@ use crate::models::{
     now_ts, ClosedTrade, LogEvent, OrderBook, PendingSignal, Position, TradeTick, WallTrack,
 };
 use crate::readiness::live_readiness;
+use crate::telegram;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -81,6 +82,7 @@ impl MarketState {
     pub fn reject(&mut self, symbol: &str, reason: &str) {
         *self.reject_counts.entry(reason.to_string()).or_insert(0) += 1;
         self.log("SKIP", &format!("ENTRY REJECTED · {reason}"), symbol, 5.0);
+        telegram::notify_rejection(symbol, reason);
     }
 
     pub fn snapshot(&self) -> Value {

@@ -8,6 +8,7 @@ mod replay;
 mod scanner;
 mod state;
 mod stream;
+mod telegram;
 
 use axum::{
     http::{header, HeaderValue},
@@ -165,6 +166,7 @@ async fn engine_loop() {
 async fn main() {
     tracing_subscriber::fmt().init();
     SETTINGS.assert_safe_mode();
+    telegram::start(&SETTINGS.trading_mode);
 
     let (socketio_layer, io) = SocketIo::new_layer();
     io.ns("/", on_connect);
