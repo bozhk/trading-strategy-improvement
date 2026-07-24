@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -51,6 +52,7 @@ struct Notifier {
     immediate_tx: mpsc::UnboundedSender<String>,
     rejections: Arc<Mutex<HashMap<(String, String), u64>>>,
     notify_rejections: bool,
+    enabled: Arc<AtomicBool>,
 }
 
 static NOTIFIER: OnceLock<Notifier> = OnceLock::new();
@@ -78,10 +80,12 @@ pub fn start(trading_mode: &str) {
 
     let (immediate_tx, immediate_rx) = mpsc::unbounded_channel();
     let rejections = Arc::new(Mutex::new(HashMap::new()));
+    let enabled = Arc::new(AtomicBool::new(true));
     let notifier = Notifier {
         immediate_tx,
         rejections: rejections.clone(),
         notify_rejections: config.notify_rejections,
+        enabled: enabled.clone(),
     };
     if NOTIFIER.set(notifier).is_err() {
         tracing::warn!("Telegram notifier was already started");
@@ -89,11 +93,27 @@ pub fn start(trading_mode: &str) {
     }
 
     let mode = trading_mode.to_uppercase();
-    tokio::spawn(worker(config, immediate_rx, rejections, mode));
+    tokio::spawn(worker(config, immediate_rx, rejections, enabled, mode));
     tracing::info!("Telegram notifications enabled");
 }
 
+pub fn is_enabled() -> bool {
+    NOTIFIER
+        .get()
+        .map(|n| n.enabled.load(Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+pub fn set_enabled(enabled: bool) {
+    if let Some(notifier) = NOTIFIER.get() {
+        notifier.enabled.store(enabled, Ordering::Relaxed);
+    }
+}
+
 pub fn notify_entry(event: EntryNotification<'_>) {
+    if !is_enabled() {
+        return;
+    }
     let text = format!(
         "ОТКРЫТА PAPER-СДЕЛКА{}\n\n{} {}\nВход: {:.6}\nКоличество: {:.6}\nНоминал: {:.2} USDT\nСтоп: {:.6}\nЦель: {:.6}\nРиск-бюджет: {:.2} USDT\nРиск до стопа: {:.2} USDT\nNet R/R: {:.2}\nЦель: {:.2}R",
         if event.inverted { " [INVERTED TEST]" } else { "" },
@@ -113,6 +133,9 @@ pub fn notify_entry(event: EntryNotification<'_>) {
 }
 
 pub fn notify_exit(event: ExitNotification<'_>) {
+    if !is_enabled() {
+        return;
+    }
     let result = if event.pnl > 0.0 {
         "ПРИБЫЛЬ"
     } else if event.pnl < 0.0 {
@@ -141,7 +164,7 @@ pub fn notify_rejection(symbol: &str, reason: &str) {
     let Some(notifier) = NOTIFIER.get() else {
         return;
     };
-    if !notifier.notify_rejections {
+    if !is_enabled() || !notifier.notify_rejections {
         return;
     }
     let key = (truncate(symbol, 32), truncate(reason, 180));
@@ -158,6 +181,7 @@ async fn worker(
     config: TelegramConfig,
     mut immediate_rx: mpsc::UnboundedReceiver<String>,
     rejections: Arc<Mutex<HashMap<(String, String), u64>>>,
+    enabled: Arc<AtomicBool>,
     mode: String,
 ) {
     let client = match Client::builder().timeout(Duration::from_secs(10)).build() {
@@ -170,7 +194,7 @@ async fn worker(
     let mut interval = tokio::time::interval(Duration::from_secs(config.rejection_summary_seconds));
     interval.tick().await;
 
-    if config.notify_startup {
+    if config.notify_startup && enabled.load(Ordering::Relaxed) {
         let text = format!(
             "PulseBook запущен\n\nРежим: {mode}\nLive trading: ЗАБЛОКИРОВАН\nУведомления об открытиях, закрытиях и отклонениях активны."
         );
@@ -181,13 +205,19 @@ async fn worker(
         tokio::select! {
             message = immediate_rx.recv() => {
                 let Some(message) = message else {
-                    flush_rejections(&client, &config, &rejections).await;
+                    if enabled.load(Ordering::Relaxed) {
+                        flush_rejections(&client, &config, &rejections).await;
+                    }
                     break;
                 };
-                send_message(&client, &config, &message).await;
+                if enabled.load(Ordering::Relaxed) {
+                    send_message(&client, &config, &message).await;
+                }
             }
             _ = interval.tick(), if config.notify_rejections => {
-                flush_rejections(&client, &config, &rejections).await;
+                if enabled.load(Ordering::Relaxed) {
+                    flush_rejections(&client, &config, &rejections).await;
+                }
             }
         }
     }

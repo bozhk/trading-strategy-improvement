@@ -130,6 +130,38 @@ async fn admin_restart(headers: HeaderMap) -> Result<Json<Value>, AdminError> {
     ))
 }
 
+async fn admin_telegram_status(headers: HeaderMap) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    Ok(Json(json!({
+        "ok": true,
+        "enabled": telegram::is_enabled(),
+    })))
+}
+
+async fn admin_telegram_toggle(
+    headers: HeaderMap,
+    ExtractJson(payload): ExtractJson<Value>,
+) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    let enabled = payload["enabled"].as_bool().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "enabled must be boolean"})),
+        )
+    })?;
+    telegram::set_enabled(enabled);
+    let status = if enabled {
+        "включены"
+    } else {
+        "отключены"
+    };
+    Ok(Json(json!({
+        "ok": true,
+        "enabled": enabled,
+        "message": format!("Telegram-уведомления {status}")
+    })))
+}
+
 async fn admin_diagnostics_export(headers: HeaderMap) -> Result<Response, AdminError> {
     require_admin(&headers)?;
     let payload = STATE.lock().snapshot();
@@ -281,6 +313,11 @@ async fn main() {
             get(admin_settings_get).put(admin_settings_put),
         )
         .route("/api/admin/restart", axum::routing::post(admin_restart))
+        .route("/api/admin/telegram/status", get(admin_telegram_status))
+        .route(
+            "/api/admin/telegram/toggle",
+            axum::routing::post(admin_telegram_toggle),
+        )
         .route(
             "/api/admin/diagnostics/export",
             get(admin_diagnostics_export),
