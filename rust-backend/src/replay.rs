@@ -1,37 +1,7 @@
 //! Deterministic, event-time replay with explicit walk-forward folds.
 #![allow(dead_code)]
 
-use serde::Deserialize;
 use serde_json::Value;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RecordedEvent {
-    pub kind: String,
-    pub symbol: String,
-    pub exchange_timestamp: f64,
-    pub local_receive_timestamp: f64,
-    pub sequence: i64,
-    pub payload: Value,
-}
-
-impl From<RecordedEvent> for ReplayEvent {
-    fn from(event: RecordedEvent) -> Self {
-        Self {
-            timestamp: event.exchange_timestamp,
-            sequence: event.sequence,
-            symbol: event.symbol,
-            kind: event.kind,
-            payload: event.payload,
-        }
-    }
-}
-
-pub fn parse_recorded_jsonl(raw: &str) -> Result<Vec<ReplayEvent>, serde_json::Error> {
-    raw.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<RecordedEvent>(line).map(Into::into))
-        .collect()
-}
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -49,6 +19,8 @@ pub struct ReplayEngine<F: FnMut(&ReplayEvent)> {
     last_sequence: HashMap<String, i64>,
     pub data_quality_errors: u64,
 }
+
+pub type WalkForwardFold = (Vec<ReplayEvent>, Vec<ReplayEvent>);
 
 impl<F: FnMut(&ReplayEvent)> ReplayEngine<F> {
     pub fn new(handler: F) -> Self {
@@ -71,25 +43,20 @@ impl<F: FnMut(&ReplayEvent)> ReplayEngine<F> {
             // Event time is advanced before dispatch: the handler can only
             // see this event and previous events, never future rows.
             let previous = self.last_sequence.get(&event.symbol).copied().unwrap_or(-1);
-            let stale_sequence = event.sequence > 0 && event.sequence <= previous;
-            if stale_sequence || event.timestamp < self.now {
+            if event.sequence <= previous || event.timestamp < self.now {
                 self.data_quality_errors += 1;
                 continue;
             }
             self.now = event.timestamp;
-            if event.sequence > 0 {
-                self.last_sequence.insert(event.symbol.clone(), event.sequence);
-            }
+            self.last_sequence
+                .insert(event.symbol.clone(), event.sequence);
             (self.handler)(event);
         }
     }
 }
 
 /// Yields expanding train windows and untouched chronological test folds.
-pub fn walk_forward(
-    events: &[ReplayEvent],
-    folds: usize,
-) -> Result<Vec<(Vec<ReplayEvent>, Vec<ReplayEvent>)>, String> {
+pub fn walk_forward(events: &[ReplayEvent], folds: usize) -> Result<Vec<WalkForwardFold>, String> {
     let mut rows: Vec<ReplayEvent> = events.to_vec();
     rows.sort_by(|a, b| {
         a.timestamp
@@ -172,19 +139,6 @@ mod tests {
                 "test folds must be strictly after training data"
             );
         }
-    }
-
-    #[test]
-    fn recorded_jsonl_replays_deterministically() {
-        let raw = r#"{"kind":"orderbook","symbol":"BTCUSDT","exchange_timestamp":2.0,"local_receive_timestamp":2.1,"sequence":2,"payload":{}}
-{"kind":"orderbook","symbol":"BTCUSDT","exchange_timestamp":1.0,"local_receive_timestamp":1.1,"sequence":1,"payload":{}}"#;
-        let events = parse_recorded_jsonl(raw).unwrap();
-        let mut first = Vec::new();
-        ReplayEngine::new(|event: &ReplayEvent| first.push((event.timestamp, event.sequence))).run(events.clone());
-        let mut second = Vec::new();
-        ReplayEngine::new(|event: &ReplayEvent| second.push((event.timestamp, event.sequence))).run(events);
-        assert_eq!(first, second);
-        assert_eq!(first, vec![(1.0, 1), (2.0, 2)]);
     }
 
     #[test]

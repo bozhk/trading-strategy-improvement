@@ -12,22 +12,23 @@ pub fn now_ts() -> f64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum Side {
-    LONG,
-    SHORT,
+    Long,
+    Short,
 }
 
 impl Side {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Side::LONG => "LONG",
-            Side::SHORT => "SHORT",
+            Side::Long => "LONG",
+            Side::Short => "SHORT",
         }
     }
     pub fn direction(&self) -> f64 {
         match self {
-            Side::LONG => 1.0,
-            Side::SHORT => -1.0,
+            Side::Long => 1.0,
+            Side::Short => -1.0,
         }
     }
 }
@@ -45,13 +46,22 @@ pub struct OrderBook {
     pub bids: BTreeMap<OrderedFloat<f64>, f64>,
     pub asks: BTreeMap<OrderedFloat<f64>, f64>,
     pub updated_at: f64,
-    pub exchange_timestamp: f64,
-    pub local_receive_timestamp: f64,
     pub sequence: i64,
 }
 
 impl OrderBook {
-    pub fn apply(&mut self, kind: &str, bids: &[(f64, f64)], asks: &[(f64, f64)], sequence: i64) {
+    pub fn apply(
+        &mut self,
+        kind: &str,
+        bids: &[(f64, f64)],
+        asks: &[(f64, f64)],
+        sequence: i64,
+    ) -> bool {
+        // A snapshot starts a new sequence. Deltas at or behind the current
+        // sequence are stale and must not refresh or mutate the live book.
+        if kind != "snapshot" && sequence <= self.sequence {
+            return false;
+        }
         if kind == "snapshot" {
             self.bids.clear();
             self.asks.clear();
@@ -74,8 +84,9 @@ impl OrderBook {
             let highest = *self.asks.keys().next_back().unwrap();
             self.asks.remove(&highest);
         }
-        self.sequence = self.sequence.max(sequence);
+        self.sequence = sequence;
         self.updated_at = now_ts();
+        true
     }
 
     /// Best bid / best ask (0.0 when empty, mirroring the Python engine).
@@ -83,6 +94,30 @@ impl OrderBook {
         let bid = self.bids.keys().next_back().map(|p| p.0).unwrap_or(0.0);
         let ask = self.asks.keys().next().map(|p| p.0).unwrap_or(0.0);
         (bid, ask)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_delta_does_not_mutate_the_book() {
+        let mut book = OrderBook::default();
+        assert!(book.apply("snapshot", &[(100.0, 2.0)], &[(101.0, 3.0)], 10));
+        assert!(!book.apply("delta", &[(100.0, 9.0)], &[], 9));
+        assert_eq!(book.bids.get(&OrderedFloat(100.0)), Some(&2.0));
+        assert_eq!(book.sequence, 10);
+    }
+
+    #[test]
+    fn snapshot_can_start_a_new_sequence() {
+        let mut book = OrderBook::default();
+        assert!(book.apply("snapshot", &[(100.0, 2.0)], &[], 10));
+        assert!(book.apply("snapshot", &[(99.0, 4.0)], &[], 1));
+        assert!(!book.bids.contains_key(&OrderedFloat(100.0)));
+        assert_eq!(book.bids.get(&OrderedFloat(99.0)), Some(&4.0));
+        assert_eq!(book.sequence, 1);
     }
 }
 
@@ -118,7 +153,7 @@ pub struct Position {
     pub last_status_log: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct ClosedTrade {
     pub symbol: String,
     pub side: &'static str,
@@ -135,86 +170,6 @@ pub struct ClosedTrade {
     pub mae: f64,
     pub signal_snapshot: Value,
     pub exit_snapshot: Value,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SetupAnalysis {
-    pub id: u64,
-    pub timestamp: f64,
-    pub symbol: String,
-    pub side: String,
-    pub decision: String,
-    pub reason: String,
-    pub wall: f64,
-    pub breakout_price: f64,
-    pub retest_price: f64,
-    pub entry: f64,
-    pub stop: f64,
-    pub target: f64,
-    pub stop_pct: f64,
-    pub target_pct: f64,
-    pub gross_rr: f64,
-    pub cost_pct: f64,
-    pub cost_coverage: f64,
-    pub stop_cost_ratio: f64,
-    pub net_rr: f64,
-    pub required_net_rr: f64,
-    pub score: i64,
-    pub score_required: i64,
-    pub score_breakdown: Value,
-    pub filter_actual: f64,
-    pub filter_required: f64,
-    pub filter_gap: f64,
-    pub imbalance: f64,
-    pub acceleration: f64,
-    pub acceleration_current_notional: f64,
-    pub acceleration_baseline_notional: f64,
-    pub acceleration_baseline_valid: bool,
-    pub spread: f64,
-    pub freshness: f64,
-    pub absorption_initial_size: f64,
-    pub absorption_current_size: f64,
-    pub absorption_depleted_quantity: f64,
-    pub absorption_executed_quantity: f64,
-    pub absorption_matched: f64,
-    pub btc_trend: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VirtualOutcome {
-    pub setup_id: u64,
-    pub variant_id: String,
-    pub symbol: String,
-    pub side: String,
-    pub started_at: f64,
-    pub fill_after: f64,
-    pub expires_at: f64,
-    pub target_r_multiple: f64,
-    pub latency_ms: u64,
-    pub requested_entry: f64,
-    pub entry: Option<f64>,
-    pub stop: f64,
-    pub target: Option<f64>,
-    pub quantity: f64,
-    pub entry_fee: f64,
-    pub exit_fee: f64,
-    pub entry_slippage_cost: f64,
-    pub exit_slippage_cost: f64,
-    pub last_price: Option<f64>,
-    pub exit_price: Option<f64>,
-    pub gross_pnl: Option<f64>,
-    pub net_pnl: Option<f64>,
-    pub net_r: Option<f64>,
-    pub mfe_pct: f64,
-    pub mae_pct: f64,
-    pub outcome: String,
-    pub filled_at: Option<f64>,
-    pub resolved_at: Option<f64>,
-    pub price_30s: Option<f64>,
-    pub price_1m: Option<f64>,
-    pub price_3m: Option<f64>,
-    pub price_5m: Option<f64>,
-    pub price_15m: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

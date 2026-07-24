@@ -6,7 +6,11 @@ pub fn summarize(pnls: &[f64]) -> Value {
     let count = pnls.len();
     let wins: Vec<f64> = pnls.iter().copied().filter(|v| *v > 0.0).collect();
     let losses: Vec<f64> = pnls.iter().copied().filter(|v| *v < 0.0).collect();
-    let win_rate = if count > 0 { wins.len() as f64 / count as f64 } else { 0.0 };
+    let win_rate = if count > 0 {
+        wins.len() as f64 / count as f64
+    } else {
+        0.0
+    };
 
     // Wilson 95% interval: prevents tiny lucky samples from looking ready.
     let z = 1.96_f64;
@@ -14,8 +18,7 @@ pub fn summarize(pnls: &[f64]) -> Value {
         let n = count as f64;
         let denom = 1.0 + z * z / n;
         let center = (win_rate + z * z / (2.0 * n)) / denom;
-        let margin =
-            z * ((win_rate * (1.0 - win_rate) + z * z / (4.0 * n)) / n).sqrt() / denom;
+        let margin = z * ((win_rate * (1.0 - win_rate) + z * z / (4.0 * n)) / n).sqrt() / denom;
         (center, margin)
     } else {
         (0.0, 0.0)

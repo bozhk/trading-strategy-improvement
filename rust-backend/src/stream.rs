@@ -1,11 +1,11 @@
 use crate::config::SETTINGS;
-use crate::models::{now_ts, OrderBook, TradeTick};
-use crate::recorder;
+use crate::models::{now_ts, TradeTick};
 use crate::state::STATE;
 use futures_util::{SinkExt, StreamExt};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,12 +29,33 @@ impl StreamManager {
         }
     }
 
-    pub async fn set_symbols(&mut self, symbols: Vec<String>, demo: bool) {
+    pub async fn set_symbols(&mut self, mut symbols: Vec<String>, demo: bool) {
         let demo = demo || SETTINGS.force_demo;
-        if symbols == self.symbols && demo == self.demo {
+        symbols.sort();
+        symbols.dedup();
+
+        let mut effective_symbols = symbols;
+        {
+            let mut state = STATE.lock();
+            if demo != self.demo && !self.symbols.is_empty() && !state.positions.is_empty() {
+                state.log(
+                    "WARN",
+                    "Data-source switch deferred until all paper positions are closed",
+                    "SYSTEM",
+                    30.0,
+                );
+                return;
+            }
+            effective_symbols.extend(state.positions.keys().cloned());
+        }
+        effective_symbols.sort();
+        effective_symbols.dedup();
+
+        if effective_symbols == self.symbols && demo == self.demo {
             return;
         }
-        self.symbols = symbols.clone();
+        let source_changed = demo != self.demo;
+        self.symbols = effective_symbols.clone();
         self.demo = demo;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         for task in self.tasks.drain(..) {
@@ -44,24 +65,39 @@ impl StreamManager {
             let mut state = STATE.lock();
             state.source = if demo { "DEMO".into() } else { "LIVE".into() };
             state.connections = 0;
-            state.books.clear();
-            state.trades.clear();
-            state.positions.clear();
-            state.metrics.clear();
+            if source_changed {
+                state.books.clear();
+                state.trades.clear();
+                state.metrics.clear();
+            } else {
+                let retained: HashSet<&str> =
+                    effective_symbols.iter().map(String::as_str).collect();
+                state
+                    .books
+                    .retain(|symbol, _| retained.contains(symbol.as_str()));
+                state
+                    .trades
+                    .retain(|symbol, _| retained.contains(symbol.as_str()));
+                state
+                    .metrics
+                    .retain(|symbol, _| retained.contains(symbol.as_str()));
+            }
+            state.wall_tracks.clear();
+            state.pending_signals.clear();
             state.session += 1;
         }
         if demo {
             let gen_ref = self.generation.clone();
-            self.tasks
-                .push(tokio::spawn(demo_feed(symbols, generation, gen_ref)));
-            STATE.lock().log(
-                "DEMO",
-                "Deterministic demo feed active; results reset",
-                "SYSTEM",
-                0.0,
-            );
+            self.tasks.push(tokio::spawn(demo_feed(
+                effective_symbols,
+                generation,
+                gen_ref,
+            )));
+            STATE
+                .lock()
+                .log("DEMO", "Deterministic demo feed active", "SYSTEM", 0.0);
         } else {
-            for chunk in symbols.chunks(SETTINGS.ws_chunk_size) {
+            for chunk in effective_symbols.chunks(SETTINGS.ws_chunk_size) {
                 let gen_ref = self.generation.clone();
                 self.tasks
                     .push(tokio::spawn(live_feed(chunk.to_vec(), generation, gen_ref)));
@@ -146,27 +182,15 @@ fn handle_message(msg: &Value) {
         let bids = parse_levels(data.get("b"));
         let asks = parse_levels(data.get("a"));
         let sequence = data["u"].as_i64().unwrap_or(0);
-        let previous_update = data["pu"].as_i64();
-        let exchange_ts = msg["ts"].as_f64().unwrap_or(0.0) / 1_000.0;
-        let received_at = now_ts();
-        let recorded = recorder::record("orderbook", symbol, exchange_ts, received_at, sequence, data);
         let mut state = STATE.lock();
-        if !recorded {
-            state.mark_data_gap(symbol, received_at);
-            state.log("WARN", "Raw recorder channel overflow", symbol, 1.0);
-        }
-        let previous = state.books.get(symbol).map(|book| book.sequence).unwrap_or(0);
-        if kind != "snapshot" && previous > 0 && previous_update.is_some_and(|pu| pu != previous) {
-            state.mark_data_gap(symbol, received_at);
-            state.log("WARN", &format!("Order book sequence gap: expected parent {previous}, got {previous_update:?}"), symbol, 1.0);
-        }
-        let book = state
+        let accepted = state
             .books
             .entry(symbol.to_string())
-            .or_insert_with(OrderBook::default);
-        book.apply(kind, &bids, &asks, sequence);
-        book.exchange_timestamp = exchange_ts;
-        book.local_receive_timestamp = received_at;
+            .or_default()
+            .apply(kind, &bids, &asks, sequence);
+        if !accepted {
+            state.data_quality_errors += 1;
+        }
     } else if topic.starts_with("publicTrade") {
         if let Some(rows) = data.as_array() {
             let mut state = STATE.lock();
@@ -179,11 +203,6 @@ fn handle_message(msg: &Value) {
                 let price: f64 = t["p"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0.0);
                 let size: f64 = t["v"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0.0);
                 let symbol = symbol.to_string();
-                let local_ts = now_ts();
-                if !recorder::record("trade", &symbol, ts / 1000.0, local_ts, 0, t) {
-                    state.mark_data_gap(&symbol, local_ts);
-                    state.log("WARN", "Raw recorder channel overflow", &symbol, 1.0);
-                }
                 state.push_tick(
                     &symbol,
                     TradeTick {
@@ -243,11 +262,8 @@ async fn demo_feed(symbols: Vec<String>, generation: u64, gen_ref: Arc<AtomicU64
                     }
                     asks.push((price * (1.0 + level as f64 * 0.00006), size));
                 }
-                let book = state
-                    .books
-                    .entry(symbol.clone())
-                    .or_insert_with(OrderBook::default);
-                book.apply("snapshot", &bids, &asks, ticks as i64);
+                let book = state.books.entry(symbol.clone()).or_default();
+                let _ = book.apply("snapshot", &bids, &asks, ticks as i64);
                 let is_buy = seed.random::<f64>() < 0.5 + bias * 0.28;
                 let size = seed.random_range(2.0..45.0);
                 state.push_tick(

@@ -11,7 +11,11 @@ fn eligible(price: f64, turnover: f64, spread: f64) -> bool {
         && spread <= SETTINGS.max_spread_pct
 }
 
-async fn fetch_json(client: &reqwest::Client, path: &str, params: &[(&str, &str)]) -> Result<Value, String> {
+async fn fetch_json(
+    client: &reqwest::Client,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<Value, String> {
     let url = format!("{}{}", SETTINGS.rest_url, path);
     let response = client
         .get(&url)
@@ -24,7 +28,10 @@ async fn fetch_json(client: &reqwest::Client, path: &str, params: &[(&str, &str)
         .map_err(|e| e.to_string())?;
     let payload: Value = response.json().await.map_err(|e| e.to_string())?;
     if payload["retCode"].as_i64().unwrap_or(-1) != 0 {
-        return Err(payload["retMsg"].as_str().unwrap_or("Bybit error").to_string());
+        return Err(payload["retMsg"]
+            .as_str()
+            .unwrap_or("Bybit error")
+            .to_string());
     }
     Ok(payload["result"].clone())
 }
@@ -36,7 +43,11 @@ pub async fn scan_live() -> Result<Vec<Instrument>, String> {
         .map_err(|e| e.to_string())?;
 
     let (info, tickers) = tokio::try_join!(
-        fetch_json(&client, "/v5/market/instruments-info", &[("category", "linear"), ("limit", "1000")]),
+        fetch_json(
+            &client,
+            "/v5/market/instruments-info",
+            &[("category", "linear"), ("limit", "1000")]
+        ),
         fetch_json(&client, "/v5/market/tickers", &[("category", "linear")]),
     )?;
 
@@ -57,7 +68,9 @@ pub async fn scan_live() -> Result<Vec<Instrument>, String> {
     let parse = |v: &Value| -> f64 { v.as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0) };
     let mut candidates: Vec<Instrument> = Vec::new();
     for t in tickers["list"].as_array().unwrap_or(&Vec::new()) {
-        let Some(symbol) = t["symbol"].as_str() else { continue };
+        let Some(symbol) = t["symbol"].as_str() else {
+            continue;
+        };
         if !active.contains(symbol) {
             continue;
         }
@@ -65,7 +78,11 @@ pub async fn scan_live() -> Result<Vec<Instrument>, String> {
         let turnover = parse(&t["turnover24h"]);
         let bid = parse(&t["bid1Price"]);
         let ask = parse(&t["ask1Price"]);
-        let spread = if bid > 0.0 && ask > 0.0 { (ask - bid) / bid * 100.0 } else { 999.0 };
+        let spread = if bid > 0.0 && ask > 0.0 {
+            (ask - bid) / bid * 100.0
+        } else {
+            999.0
+        };
         if eligible(price, turnover, spread) {
             candidates.push(Instrument {
                 symbol: symbol.to_string(),
@@ -88,10 +105,12 @@ pub async fn radar_loop(manager: &mut StreamManager) {
                     let mut state = STATE.lock();
                     state.radar = rows
                         .iter()
-                        .map(|x| json!({
-                            "symbol": x.symbol, "price": x.price,
-                            "turnover24h": x.turnover24h, "spread_pct": x.spread_pct,
-                        }))
+                        .map(|x| {
+                            json!({
+                                "symbol": x.symbol, "price": x.price,
+                                "turnover24h": x.turnover24h, "spread_pct": x.spread_pct,
+                            })
+                        })
                         .collect();
                     state.last_scan = now_ts();
                     let message = format!("Radar selected {} liquid perpetuals", rows.len());
@@ -108,8 +127,11 @@ pub async fn radar_loop(manager: &mut StreamManager) {
                 let message = format!("Live radar unavailable: {error:.80}");
                 STATE.lock().log("WARN", &message, "SYSTEM", 30.0);
                 if SETTINGS.demo_fallback {
-                    let symbols: Vec<String> =
-                        SETTINGS.demo_symbols.iter().map(|s| s.to_string()).collect();
+                    let symbols: Vec<String> = SETTINGS
+                        .demo_symbols
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
                     manager.set_symbols(symbols, true).await;
                 }
             }

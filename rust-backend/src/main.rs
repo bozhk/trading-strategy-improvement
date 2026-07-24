@@ -4,51 +4,48 @@ mod detail;
 mod execution;
 mod models;
 mod readiness;
-mod recorder;
 mod replay;
 mod scanner;
 mod state;
 mod stream;
 
-use axum::{
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{Html, IntoResponse},
-    routing::{get, post},
-    Json, Router,
-};
-use config::{admin_password, save_settings, Settings, SETTINGS};
+use axum::{response::Html, routing::get, Json, Router};
+use config::SETTINGS;
 use detail::build_symbol_detail;
 use serde_json::{json, Value};
 use socketioxide::extract::{AckSender, Data, SocketRef};
 use socketioxide::SocketIo;
 use state::STATE;
+use std::path::PathBuf;
 use std::time::Duration;
+use tower_http::services::ServeDir;
 
-const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
-const DASHBOARD_CSS: &str = include_str!("../dashboard/app.css");
-const DASHBOARD_JS: &str = include_str!("../dashboard/app.js");
-
-async fn index() -> Html<&'static str> {
-    Html(DASHBOARD_HTML)
+fn assets_root() -> PathBuf {
+    // Shares the exact same dashboard as the Python backend.
+    for candidate in ["../backend", "backend", "."] {
+        let path = PathBuf::from(candidate);
+        if path.join("templates/index.html").exists() {
+            return path;
+        }
+    }
+    PathBuf::from("../backend")
 }
 
-async fn dashboard_css() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/css; charset=utf-8"),
-        )],
-        DASHBOARD_CSS,
-    )
-}
-
-async fn dashboard_js() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/javascript; charset=utf-8"),
-        )],
-        DASHBOARD_JS,
+async fn index() -> Html<String> {
+    let template = tokio::fs::read_to_string(assets_root().join("templates/index.html"))
+        .await
+        .unwrap_or_else(|_| "<h1>dashboard template missing</h1>".to_string());
+    // Substitute the two Flask url_for expressions with static paths.
+    Html(
+        template
+            .replace(
+                "{{ url_for('static', filename='app.css') }}",
+                "/static/app.css",
+            )
+            .replace(
+                "{{ url_for('static', filename='app.js') }}",
+                "/static/app.js",
+            ),
     )
 }
 
@@ -64,136 +61,6 @@ async fn health() -> Json<Value> {
 
 async fn snapshot() -> Json<Value> {
     Json(STATE.lock().snapshot())
-}
-
-fn supplied_admin_password(headers: &HeaderMap) -> Option<&str> {
-    if let Some(password) = headers
-        .get("x-admin-password")
-        .and_then(|value| value.to_str().ok())
-    {
-        return Some(password.trim());
-    }
-
-    headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .and_then(|authorization| {
-            authorization
-                .strip_prefix("Bearer ")
-                .or_else(|| authorization.strip_prefix("bearer "))
-                .or(Some(authorization))
-        })
-        .map(str::trim)
-}
-
-fn admin_authorized(headers: &HeaderMap) -> bool {
-    let Some(expected) = admin_password() else {
-        return false;
-    };
-    let Some(supplied) = supplied_admin_password(headers) else {
-        return false;
-    };
-    let expected = expected.trim();
-    if supplied.len() != expected.len() {
-        return false;
-    }
-    supplied
-        .bytes()
-        .zip(expected.bytes())
-        .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-        == 0
-}
-
-async fn settings_status() -> Json<Value> {
-    // A single guard: nested STATE.lock() calls inside one expression
-    // deadlock because parking_lot mutexes are not reentrant.
-    let (source, active_symbols, selected_symbols) = {
-        let state = STATE.lock();
-        (state.source.clone(), state.books.len(), state.radar.len())
-    };
-    Json(json!({
-        "configured": admin_password().is_some(),
-        "mode": SETTINGS.trading_mode,
-        "source": source,
-        "active_symbols": active_symbols,
-        "selected_symbols": selected_symbols,
-        "max_symbols": SETTINGS.max_symbols,
-        "config_path": config::config_path().display().to_string(),
-        "live_trading_locked": true
-    }))
-}
-
-async fn get_settings(headers: HeaderMap) -> Result<Json<Settings>, (StatusCode, Json<Value>)> {
-    if !admin_authorized(&headers) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Неверный пароль администратора"})),
-        ));
-    }
-    Ok(Json(SETTINGS.clone()))
-}
-
-async fn put_settings(
-    headers: HeaderMap,
-    Json(settings): Json<Settings>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !admin_authorized(&headers) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Неверный пароль администратора"})),
-        ));
-    }
-    save_settings(&settings)
-        .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({"error": error}))))?;
-    Ok(Json(
-        json!({"ok": true, "restart_required": true, "message": "Настройки сохранены. Перезапустите движок для применения."}),
-    ))
-}
-
-async fn export_diagnostics(
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
-    if !admin_authorized(&headers) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Неверный пароль администратора"})),
-        ));
-    }
-    let payload = STATE.lock().diagnostics_export();
-    let body = serde_json::to_string_pretty(&payload).map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": error.to_string()})),
-        )
-    })?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
-            (
-                header::CONTENT_DISPOSITION,
-                "attachment; filename=diagnostics.json",
-            ),
-        ],
-        body,
-    ))
-}
-
-async fn restart_engine(headers: HeaderMap) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !admin_authorized(&headers) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Неверный пароль администратора"})),
-        ));
-    }
-    tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        // A non-zero dedicated code makes both systemd Restart=on-failure and PM2 restart us.
-        std::process::exit(75);
-    });
-    Ok(Json(
-        json!({"ok": true, "message": "Движок перезапускается менеджером процессов"}),
-    ))
 }
 
 fn normalize_symbol(payload: &Value) -> Option<String> {
@@ -296,7 +163,6 @@ async fn engine_loop() {
 async fn main() {
     tracing_subscriber::fmt().init();
     SETTINGS.assert_safe_mode();
-    recorder::init();
 
     let (socketio_layer, io) = SocketIo::new_layer();
     io.ns("/", on_connect);
@@ -307,14 +173,9 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
-        .route("/static/app.css", get(dashboard_css))
-        .route("/static/app.js", get(dashboard_js))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
-        .route("/api/settings/status", get(settings_status))
-        .route("/api/admin/settings", get(get_settings).put(put_settings))
-        .route("/api/admin/diagnostics/export", get(export_diagnostics))
-        .route("/api/admin/restart", post(restart_engine))
+        .nest_service("/static", ServeDir::new(assets_root().join("static")))
         .layer(socketio_layer);
 
     let address = format!("{}:{}", SETTINGS.host, SETTINGS.port);
@@ -326,43 +187,4 @@ async fn main() {
         .await
         .expect("bind server port");
     axum::serve(listener, app).await.expect("server crashed");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{supplied_admin_password, DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS};
-    use axum::http::{header, HeaderMap, HeaderValue};
-
-    #[test]
-    fn accepts_supported_admin_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-admin-password",
-            HeaderValue::from_static("secret-password"),
-        );
-        assert_eq!(supplied_admin_password(&headers), Some("secret-password"));
-
-        headers.remove("x-admin-password");
-        headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer secret-password"),
-        );
-        assert_eq!(supplied_admin_password(&headers), Some("secret-password"));
-
-        headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("secret-password"),
-        );
-        assert_eq!(supplied_admin_password(&headers), Some("secret-password"));
-    }
-
-    #[test]
-    fn dashboard_assets_are_embedded() {
-        assert!(DASHBOARD_HTML.contains("PulseBook"));
-        assert!(DASHBOARD_HTML.contains("/static/app.css"));
-        assert!(DASHBOARD_HTML.contains("/static/app.js"));
-        assert!(DASHBOARD_CSS.contains(":root"));
-        assert!(DASHBOARD_JS.contains("/api/snapshot"));
-        assert!(!DASHBOARD_HTML.contains("dashboard template missing"));
-    }
 }

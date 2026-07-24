@@ -1,57 +1,5 @@
 use crate::config::SETTINGS;
-use crate::models::{OrderBook, Side};
-
-#[derive(Debug, Clone, Copy)]
-pub struct BookFill {
-    pub price: f64,
-    pub quantity: f64,
-    pub fee: f64,
-    pub slippage_cost: f64,
-}
-
-/// Conservatively fills the whole requested quantity against the currently
-/// visible L2 book. Returns None instead of assuming liquidity beyond depth 50.
-pub fn book_fill(
-    book: &OrderBook,
-    side: Side,
-    quantity: f64,
-    is_entry: bool,
-) -> Option<BookFill> {
-    if !quantity.is_finite() || quantity <= 0.0 {
-        return None;
-    }
-    let buy = if is_entry { side == Side::LONG } else { side == Side::SHORT };
-    let levels: Vec<(f64, f64)> = if buy {
-        book.asks.iter().map(|(price, size)| (price.0, *size)).collect()
-    } else {
-        book.bids
-            .iter()
-            .rev()
-            .map(|(price, size)| (price.0, *size))
-            .collect()
-    };
-    let touch = levels.first()?.0;
-    let mut remaining = quantity;
-    let mut notional = 0.0;
-    for (price, available) in levels {
-        let filled = remaining.min(available.max(0.0));
-        notional += price * filled;
-        remaining -= filled;
-        if remaining <= quantity * 1e-12 {
-            break;
-        }
-    }
-    if remaining > quantity * 1e-12 {
-        return None;
-    }
-    let price = notional / quantity;
-    Some(BookFill {
-        price,
-        quantity,
-        fee: notional * SETTINGS.taker_fee_pct,
-        slippage_cost: (price - touch).abs() * quantity,
-    })
-}
+use crate::models::Side;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
@@ -62,7 +10,7 @@ pub struct Fill {
 
 /// Marketable entry: LONG pays the ask; SHORT sells the bid.
 pub fn entry_fill(side: Side, bid: f64, ask: f64, quantity: f64) -> Fill {
-    let touch = if side == Side::LONG { ask } else { bid };
+    let touch = if side == Side::Long { ask } else { bid };
     let price = touch * (1.0 + side.direction() * SETTINGS.slippage_pct);
     Fill {
         price,
@@ -73,7 +21,7 @@ pub fn entry_fill(side: Side, bid: f64, ask: f64, quantity: f64) -> Fill {
 
 /// Liquidating exit crosses to the opposite side of the spread.
 pub fn exit_fill(side: Side, bid: f64, ask: f64, quantity: f64) -> Fill {
-    let touch = if side == Side::LONG { bid } else { ask };
+    let touch = if side == Side::Long { bid } else { ask };
     let price = touch * (1.0 - side.direction() * SETTINGS.slippage_pct);
     Fill {
         price,
@@ -104,32 +52,77 @@ pub fn estimated_round_trip_cost_pct(bid: f64, ask: f64) -> f64 {
     variable * SETTINGS.cost_safety_multiplier
 }
 
+/// Returns the minimum target distance needed to satisfy the after-cost R/R
+/// gate, while preserving the configured gross R target as a lower bound.
+pub fn cost_aware_target_distance_pct(
+    stop_distance_pct: f64,
+    cost_pct: f64,
+    base_target_r: f64,
+    min_net_reward_risk: f64,
+    max_target_pct: f64,
+) -> Option<f64> {
+    if !stop_distance_pct.is_finite()
+        || !cost_pct.is_finite()
+        || stop_distance_pct <= 0.0
+        || cost_pct < 0.0
+        || base_target_r <= 0.0
+        || min_net_reward_risk <= 0.0
+        || max_target_pct <= 0.0
+    {
+        return None;
+    }
+
+    let base_distance = stop_distance_pct * base_target_r;
+    let after_cost_distance = cost_pct + min_net_reward_risk * (stop_distance_pct + cost_pct);
+    let distance = base_distance.max(after_cost_distance);
+    (distance.is_finite() && distance <= max_target_pct).then_some(distance)
+}
+
+pub fn net_reward_risk(target_distance_pct: f64, stop_distance_pct: f64, cost_pct: f64) -> f64 {
+    let net_risk = stop_distance_pct + cost_pct;
+    if net_risk <= 0.0 {
+        return 0.0;
+    }
+    (target_distance_pct - cost_pct) / net_risk
+}
+
+/// Estimated net loss per unit when the structural stop is reached.
+pub fn stop_loss_per_unit(side: Side, bid: f64, ask: f64, stop_price: f64) -> f64 {
+    if bid <= 0.0 || ask <= 0.0 || stop_price <= 0.0 {
+        return f64::INFINITY;
+    }
+    let entry = entry_fill(side, bid, ask, 1.0);
+    let exit = exit_fill(side, stop_price, stop_price, 1.0);
+    let (_, net) = trade_pnl(side, entry.price, exit.price, 1.0, entry.fee, exit.fee);
+    (-net).max(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn entry_is_worse_than_touch() {
-        let long = entry_fill(Side::LONG, 100.0, 100.1, 1.0);
+        let long = entry_fill(Side::Long, 100.0, 100.1, 1.0);
         assert!(long.price > 100.1);
-        let short = entry_fill(Side::SHORT, 100.0, 100.1, 1.0);
+        let short = entry_fill(Side::Short, 100.0, 100.1, 1.0);
         assert!(short.price < 100.0);
     }
 
     #[test]
     fn exit_is_worse_than_touch() {
-        let long = exit_fill(Side::LONG, 100.0, 100.1, 1.0);
+        let long = exit_fill(Side::Long, 100.0, 100.1, 1.0);
         assert!(long.price < 100.0);
-        let short = exit_fill(Side::SHORT, 100.0, 100.1, 1.0);
+        let short = exit_fill(Side::Short, 100.0, 100.1, 1.0);
         assert!(short.price > 100.1);
     }
 
     #[test]
     fn flat_round_trip_is_a_net_loss() {
-        let entry = entry_fill(Side::LONG, 100.0, 100.05, 2.0);
-        let exit = exit_fill(Side::LONG, 100.0, 100.05, 2.0);
+        let entry = entry_fill(Side::Long, 100.0, 100.05, 2.0);
+        let exit = exit_fill(Side::Long, 100.0, 100.05, 2.0);
         let (_, net) = trade_pnl(
-            Side::LONG,
+            Side::Long,
             entry.price,
             exit.price,
             2.0,
@@ -140,30 +133,38 @@ mod tests {
     }
 
     #[test]
-    fn book_fill_uses_visible_depth_vwap() {
-        let mut book = OrderBook::default();
-        book.apply(
-            "snapshot",
-            &[(100.0, 2.0)],
-            &[(100.1, 1.0), (100.2, 2.0)],
-            1,
-        );
-        let fill = book_fill(&book, Side::LONG, 2.0, true).unwrap();
-        assert!((fill.price - 100.15).abs() < 1e-9);
-        assert!(fill.slippage_cost > 0.0);
-    }
-
-    #[test]
-    fn book_fill_rejects_partial_visible_depth() {
-        let mut book = OrderBook::default();
-        book.apply("snapshot", &[(100.0, 1.0)], &[(100.1, 1.0)], 1);
-        assert!(book_fill(&book, Side::LONG, 2.0, true).is_none());
-    }
-
-    #[test]
     fn round_trip_cost_includes_safety_margin() {
         let cost = estimated_round_trip_cost_pct(100.0, 100.05);
         let raw = 0.05 / 100.025 + 2.0 * (0.0005 + 0.0003);
         assert!(cost > raw, "safety multiplier must inflate the estimate");
+    }
+
+    #[test]
+    fn cost_aware_target_satisfies_net_reward_risk() {
+        let stop = 0.0027;
+        let cost = 0.0022;
+        let target = cost_aware_target_distance_pct(stop, cost, 1.8, 1.35, 0.01).unwrap();
+        assert!((target - 0.008815).abs() < 1e-12);
+        assert!(net_reward_risk(target, stop, cost) >= 1.35 - 1e-12);
+    }
+
+    #[test]
+    fn zero_cost_keeps_the_base_target() {
+        let target = cost_aware_target_distance_pct(0.003, 0.0, 1.8, 1.35, 0.01).unwrap();
+        assert!((target - 0.0054).abs() < 1e-12);
+    }
+
+    #[test]
+    fn infeasible_target_is_rejected() {
+        assert!(cost_aware_target_distance_pct(0.003, 0.003, 1.8, 1.35, 0.005).is_none());
+    }
+
+    #[test]
+    fn stop_loss_sizing_includes_costs() {
+        let loss = stop_loss_per_unit(Side::Long, 100.0, 100.05, 99.5);
+        assert!(
+            loss > 0.55,
+            "fees and slippage must increase loss beyond the raw stop distance"
+        );
     }
 }
