@@ -77,14 +77,14 @@ cargo run
 
 # Продакшен-сборка (медленная сборка, быстрый код) — всегда для реальной работы
 cargo build --release
-./target/release/pulsebook-engine
+./target/release/pulsebook
 
 # Тесты
 cargo test
 ```
 
-Откройте `http://localhost:8000` — dashboard тот же, что у Python-версии
-(шаблон и статика берутся из `../backend/templates` и `../backend/static`).
+Откройте `http://localhost:8000`. Dashboard из `dashboard/` встраивается в
+бинарник при сборке, поэтому для запуска не нужны отдельные HTML/CSS/JS-файлы.
 
 ### Переменные окружения
 
@@ -93,11 +93,8 @@ PORT=8000                 # порт HTTP-сервера
 DATA_MODE=demo            # demo (синтетика) | real (публичные стримы Bybit)
 ACCOUNT_EQUITY=10000      # виртуальный капитал
 RISK_PER_TRADE_PCT=0.005  # риск на сделку (0.5%)
-TEMPLATES_DIR=../backend/templates
-STATIC_DIR=../backend/static
-
 # Пример: реальные данные Bybit на порту 9000
-DATA_MODE=real PORT=9000 ./target/release/pulsebook-engine
+DATA_MODE=real PORT=9000 ./target/release/pulsebook
 ```
 
 `TRADING_MODE=live` намеренно вызывает мгновенный отказ запуска —
@@ -110,7 +107,7 @@ expectancy, просадка ≤ 10%) и отдельной ревизии ко�
 ```bash
 # Собрать на сервере (или скопировать готовый бинарник под ту же архитектуру)
 cargo build --release
-sudo cp target/release/pulsebook-engine /usr/local/bin/
+sudo cp target/release/pulsebook /usr/local/bin/
 
 sudo tee /etc/systemd/system/pulsebook.service > /dev/null <<'EOF'
 [Unit]
@@ -118,12 +115,10 @@ Description=PulseBook order-flow engine
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/pulsebook-engine
+ExecStart=/usr/local/bin/pulsebook
 WorkingDirectory=/opt/pulsebook
 Environment=DATA_MODE=real
 Environment=PORT=8000
-Environment=TEMPLATES_DIR=/opt/pulsebook/templates
-Environment=STATIC_DIR=/opt/pulsebook/static
 Restart=on-failure
 RestartSec=5
 
@@ -132,7 +127,6 @@ WantedBy=multi-user.target
 EOF
 
 sudo mkdir -p /opt/pulsebook
-sudo cp -r ../backend/templates ../backend/static /opt/pulsebook/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pulsebook
 sudo systemctl status pulsebook
