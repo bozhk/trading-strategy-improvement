@@ -17,18 +17,18 @@ const WALL_DEPLETION_RATIO: f64 = 0.20;
 const WALL_TAPE_MATCH_RATIO: f64 = 0.90;
 
 const TAPE_WINDOW_SECONDS: f64 = 1.0;
-const TAPE_ACCELERATION_MULTIPLIER: f64 = 3.0;
+const TAPE_ACCELERATION_MULTIPLIER: f64 = 3.5;
 const TAPE_DOMINANCE_RATIO: f64 = 0.70;
 
 const BTC_TREND_WINDOW_SECONDS: f64 = 60.0;
 const BTC_MIN_TREND_COVERAGE_SECONDS: f64 = 45.0;
-const BTC_MIN_TREND_PCT: f64 = 0.0002;
+const BTC_MIN_TREND_PCT: f64 = 0.0005;
 
 const BOOK_FRESHNESS_SECONDS: f64 = 2.0;
 
 // Entry confirmation: the book imbalance must agree with the direction.
-const ENTRY_IMBALANCE_LONG: f64 = 0.55;
-const ENTRY_IMBALANCE_SHORT: f64 = 0.45;
+const ENTRY_IMBALANCE_LONG: f64 = 0.60;
+const ENTRY_IMBALANCE_SHORT: f64 = 0.40;
 const ENTRY_BREAKOUT_TOLERANCE_PCT: f64 = 0.0002;
 
 // Exit management: opposing tape must persist for N consecutive ticks.
