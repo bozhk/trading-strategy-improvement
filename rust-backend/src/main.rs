@@ -11,8 +11,9 @@ mod stream;
 mod telegram;
 
 use axum::{
-    http::{header, HeaderValue},
-    response::{Html, IntoResponse},
+    extract::Json as ExtractJson,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -64,6 +65,97 @@ async fn health() -> Json<Value> {
 
 async fn snapshot() -> Json<Value> {
     Json(STATE.lock().snapshot())
+}
+
+type AdminError = (StatusCode, Json<Value>);
+
+fn require_admin(headers: &HeaderMap) -> Result<(), AdminError> {
+    if !SETTINGS.admin_password_configured() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "ADMIN_PASSWORD is not configured"})),
+        ));
+    }
+    let password = headers
+        .get("x-admin-password")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !SETTINGS.admin_password_matches(password) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Invalid admin password"})),
+        ));
+    }
+    Ok(())
+}
+
+async fn settings_status() -> Json<Value> {
+    let state = STATE.lock();
+    Json(json!({
+        "mode": SETTINGS.trading_mode,
+        "source": state.source,
+        "active_symbols": state.books.len(),
+    }))
+}
+
+async fn admin_settings_get(headers: HeaderMap) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    Ok(Json(SETTINGS.public_settings()))
+}
+
+async fn admin_settings_put(
+    headers: HeaderMap,
+    ExtractJson(payload): ExtractJson<Value>,
+) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    SETTINGS
+        .save_admin_settings(&payload)
+        .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({"error": error}))))?;
+    Ok(Json(json!({
+        "ok": true,
+        "message": "Настройки сохранены. Перезапустите движок для применения.",
+    })))
+}
+
+async fn admin_restart(headers: HeaderMap) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        std::process::exit(0);
+    });
+    Ok(Json(
+        json!({"ok": true, "message": "Перезапуск запланирован"}),
+    ))
+}
+
+async fn admin_diagnostics_export(headers: HeaderMap) -> Result<Response, AdminError> {
+    require_admin(&headers)?;
+    let payload = STATE.lock().snapshot();
+    let body = serde_json::to_vec_pretty(&json!({
+        "version": 1,
+        "generated_at": crate::models::now_ts(),
+        "snapshot": payload,
+    }))
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+    })?;
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename= pulsebook-diagnostics.json"),
+            ),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 fn normalize_symbol(payload: &Value) -> Option<String> {
@@ -181,6 +273,16 @@ async fn main() {
         .route("/static/app.js", get(dashboard_js))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
+        .route("/api/settings/status", get(settings_status))
+        .route(
+            "/api/admin/settings",
+            get(admin_settings_get).put(admin_settings_put),
+        )
+        .route("/api/admin/restart", axum::routing::post(admin_restart))
+        .route(
+            "/api/admin/diagnostics/export",
+            get(admin_diagnostics_export),
+        )
         .layer(socketio_layer);
 
     let address = format!("{}:{}", SETTINGS.host, SETTINGS.port);

@@ -102,6 +102,7 @@ TELEGRAM_THREAD_ID=123                 # только для topic в forum-гр
 TELEGRAM_NOTIFY_REJECTIONS=true
 TELEGRAM_REJECT_SUMMARY_SECONDS=300    # одна сводка отказов каждые 5 минут
 TELEGRAM_NOTIFY_STARTUP=true
+ADMIN_PASSWORD=replace-with-dashboard-password
 
 # Пример: реальные данные Bybit на порту 9000
 DATA_MODE=real PORT=9000 ./target/release/pulsebook
@@ -123,6 +124,10 @@ Token является секретом: не добавляйте его в Git
 На сервере передайте значения через environment PM2/systemd. После изменения
 environment перезапустите процесс с `--update-env`.
 
+`ADMIN_PASSWORD` обязателен для раздела настроек dashboard. Если он не задан,
+вход вернёт ошибку `ADMIN_PASSWORD is not configured`. Пароль передаётся в
+заголовке `x-admin-password`; используйте HTTPS перед публичным сервером.
+
 Бот отправляет открытия и закрытия сразу. Отклонения агрегируются по символу и
 причине, затем отправляются одной сводкой. Это защищает группу и Telegram API от
 тысяч одинаковых сообщений. Ошибки Telegram не блокируют торговый цикл.
@@ -136,6 +141,7 @@ sudo sh -c 'printf "%s\n" \
   "TELEGRAM_BOT_TOKEN=123456:replace-with-token" \
   "TELEGRAM_CHAT_ID=-1001234567890" \
   "TELEGRAM_MENTION=@ananasec" \
+  "ADMIN_PASSWORD=replace-with-dashboard-password" \
   "TELEGRAM_REJECT_SUMMARY_SECONDS=300" \
   > /opt/pulsebook/pulsebook.env'
 

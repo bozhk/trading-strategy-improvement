@@ -57,10 +57,11 @@ jobs:
         host: ${{ secrets.SERVER_HOST }}
         username: root
         key: ${{ secrets.SERVER_SSH_KEY }}
-        envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,TELEGRAM_THREAD_ID
+        envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,TELEGRAM_THREAD_ID,ADMIN_PASSWORD
         script: |
           test -n "$TELEGRAM_BOT_TOKEN" || { echo "Missing TELEGRAM_BOT_TOKEN GitHub Secret"; exit 1; }
           test -n "$TELEGRAM_CHAT_ID" || { echo "Missing TELEGRAM_CHAT_ID GitHub Secret"; exit 1; }
+          test -n "$ADMIN_PASSWORD" || { echo "Missing ADMIN_PASSWORD GitHub Secret"; exit 1; }
 
           umask 077
           printf '%s\n' \
@@ -68,6 +69,7 @@ jobs:
             "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID" \
             "TELEGRAM_MENTION=@ananasec" \
             "TELEGRAM_THREAD_ID=$TELEGRAM_THREAD_ID" \
+            "ADMIN_PASSWORD=$ADMIN_PASSWORD" \
             "TELEGRAM_NOTIFY_REJECTIONS=true" \
             "TELEGRAM_REJECT_SUMMARY_SECONDS=300" \
             "TELEGRAM_NOTIFY_STARTUP=true" \
@@ -82,3 +84,4 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
+        ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}

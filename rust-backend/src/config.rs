@@ -1,4 +1,7 @@
+use serde_json::{json, Value};
 use std::env;
+use std::fs;
+use std::path::Path;
 use std::sync::LazyLock;
 
 fn env_str(name: &str, default: &str) -> String {
@@ -23,6 +26,73 @@ fn env_bool(name: &str, default: bool) -> bool {
     env::var(name)
         .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
+}
+
+const ADMIN_SETTING_KEYS: &[&str] = &[
+    "force_demo",
+    "demo_fallback",
+    "scan_interval",
+    "max_symbols",
+    "min_turnover",
+    "min_price",
+    "max_spread_pct",
+    "ws_chunk_size",
+    "demo_symbols",
+    "trading_mode",
+    "account_equity",
+    "risk_per_trade_pct",
+    "max_position_notional",
+    "max_open_positions",
+    "max_daily_loss_pct",
+    "max_consecutive_losses",
+    "cooldown_seconds",
+    "loss_cooldown_seconds",
+    "taker_fee_pct",
+    "slippage_pct",
+    "cost_safety_multiplier",
+    "min_net_reward_risk",
+    "target_r_multiple",
+    "max_target_pct",
+    "max_holding_seconds",
+    "min_stop_pct",
+    "max_stop_pct",
+    "structure_buffer_pct",
+    "trail_arm_r",
+    "trail_giveback_r",
+    "breakeven_arm_r",
+    "signal_expiry_seconds",
+    "retest_tolerance_pct",
+    "retest_hold_ticks",
+    "min_confluence_score",
+    "min_live_trades",
+    "min_live_profit_factor",
+    "min_live_expectancy",
+    "max_live_drawdown_pct",
+];
+
+fn env_file_path() -> String {
+    env_str("PULSEBOOK_ENV_FILE", "pulsebook.env")
+}
+
+fn load_env_file() {
+    let path = env_file_path();
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return;
+    };
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        env::set_var(key, value.trim().trim_matches(['"', '\'']));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -157,9 +227,167 @@ impl Settings {
             "ACCOUNT_EQUITY and RISK_PER_TRADE_PCT must be positive"
         );
     }
+
+    pub fn admin_password_configured(&self) -> bool {
+        env::var("ADMIN_PASSWORD")
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    pub fn admin_password_matches(&self, password: &str) -> bool {
+        env::var("ADMIN_PASSWORD")
+            .map(|expected| !expected.is_empty() && expected == password)
+            .unwrap_or(false)
+    }
+
+    pub fn public_settings(&self) -> Value {
+        json!({
+            "force_demo": self.force_demo,
+            "demo_fallback": self.demo_fallback,
+            "trading_mode": self.trading_mode,
+            "scan_interval": self.scan_interval,
+            "max_symbols": self.max_symbols,
+            "min_turnover": self.min_turnover,
+            "min_price": self.min_price,
+            "max_spread_pct": self.max_spread_pct,
+            "ws_chunk_size": self.ws_chunk_size,
+            "demo_symbols": self.demo_symbols,
+            "trading_mode": self.trading_mode,
+            "account_equity": self.account_equity,
+            "risk_per_trade_pct": self.risk_per_trade_pct,
+            "max_position_notional": self.max_position_notional,
+            "max_open_positions": self.max_open_positions,
+            "max_daily_loss_pct": self.max_daily_loss_pct,
+            "max_consecutive_losses": self.max_consecutive_losses,
+            "cooldown_seconds": self.cooldown_seconds,
+            "loss_cooldown_seconds": self.loss_cooldown_seconds,
+            "taker_fee_pct": self.taker_fee_pct,
+            "slippage_pct": self.slippage_pct,
+            "cost_safety_multiplier": self.cost_safety_multiplier,
+            "min_net_reward_risk": self.min_net_reward_risk,
+            "target_r_multiple": self.target_r_multiple,
+            "max_target_pct": self.max_target_pct,
+            "max_holding_seconds": self.max_holding_seconds,
+            "min_stop_pct": self.min_stop_pct,
+            "max_stop_pct": self.max_stop_pct,
+            "structure_buffer_pct": self.structure_buffer_pct,
+            "trail_arm_r": self.trail_arm_r,
+            "trail_giveback_r": self.trail_giveback_r,
+            "breakeven_arm_r": self.breakeven_arm_r,
+            "signal_expiry_seconds": self.signal_expiry_seconds,
+            "retest_tolerance_pct": self.retest_tolerance_pct,
+            "retest_hold_ticks": self.retest_hold_ticks,
+            "min_confluence_score": self.min_confluence_score,
+            "min_live_trades": self.min_live_trades,
+            "min_live_profit_factor": self.min_live_profit_factor,
+            "min_live_expectancy": self.min_live_expectancy,
+            "max_live_drawdown_pct": self.max_live_drawdown_pct,
+        })
+    }
+
+    pub fn save_admin_settings(&self, values: &Value) -> Result<(), String> {
+        let object = values
+            .as_object()
+            .ok_or_else(|| "Settings payload must be a JSON object".to_string())?;
+        for key in object.keys() {
+            if !ADMIN_SETTING_KEYS.contains(&key.as_str()) {
+                return Err(format!("Unsupported setting: {key}"));
+            }
+        }
+        validate_admin_settings(object)?;
+
+        let path = env_file_path();
+        let existing = fs::read_to_string(&path).unwrap_or_default();
+        let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
+        for key in ADMIN_SETTING_KEYS {
+            let Some(value) = object.get(*key) else {
+                continue;
+            };
+            let env_key = key.to_uppercase();
+            let encoded = env_value(value)?;
+            let replacement = format!("{env_key}={encoded}");
+            if let Some(line) = lines.iter_mut().find(|line| {
+                line.split_once('=').map(|(name, _)| name.trim()) == Some(env_key.as_str())
+            }) {
+                *line = replacement;
+            } else {
+                lines.push(replacement);
+            }
+        }
+        let content = format!("{}\n", lines.join("\n"));
+        fs::write(Path::new(&path), content).map_err(|error| error.to_string())
+    }
+}
+
+fn env_value(value: &Value) -> Result<String, String> {
+    match value {
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::String(value) => Ok(value.clone()),
+        Value::Array(values) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| "List settings must contain strings".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|values| values.join(",")),
+        _ => Err("Settings must contain booleans, numbers, or string lists".to_string()),
+    }
+}
+
+fn validate_admin_settings(values: &serde_json::Map<String, Value>) -> Result<(), String> {
+    for key in ADMIN_SETTING_KEYS {
+        let Some(value) = values.get(*key) else {
+            continue;
+        };
+        match *key {
+            "force_demo" | "demo_fallback" => {
+                if !value.is_boolean() {
+                    return Err(format!("{key} must be boolean"));
+                }
+            }
+            "demo_symbols" => {
+                if !value.is_array()
+                    || value
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| !item.is_string())
+                {
+                    return Err("demo_symbols must be a string list".to_string());
+                }
+            }
+            "trading_mode" => {
+                if !value
+                    .as_str()
+                    .map(|mode| matches!(mode, "paper" | "replay" | "simulator"))
+                    .unwrap_or(false)
+                {
+                    return Err("trading_mode must remain paper, replay, or simulator".to_string());
+                }
+            }
+            _ => {
+                if !value.as_f64().map(f64::is_finite).unwrap_or(false) {
+                    return Err(format!("{key} must be a finite number"));
+                }
+            }
+        }
+    }
+    if values
+        .get("target_r_multiple")
+        .and_then(Value::as_f64)
+        .zip(values.get("min_net_reward_risk").and_then(Value::as_f64))
+        .is_some_and(|(target, minimum)| target <= minimum || minimum <= 0.0)
+    {
+        return Err("target_r_multiple must be greater than min_net_reward_risk > 0".to_string());
+    }
+    Ok(())
 }
 
 pub static SETTINGS: LazyLock<Settings> = LazyLock::new(|| {
+    load_env_file();
     let settings = Settings::new();
     settings.assert_safe_mode();
     settings
