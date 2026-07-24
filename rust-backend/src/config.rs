@@ -30,6 +30,7 @@ fn env_bool(name: &str, default: bool) -> bool {
 
 const ADMIN_SETTING_KEYS: &[&str] = &[
     "force_demo",
+    "invert_sides",
     "demo_fallback",
     "scan_interval",
     "max_symbols",
@@ -106,6 +107,7 @@ pub struct Settings {
     pub host: String,
     pub port: u16,
     pub force_demo: bool,
+    pub invert_sides: bool,
     pub demo_fallback: bool,
     pub trading_mode: String,
     pub scan_interval: u64,
@@ -167,6 +169,7 @@ impl Settings {
             port: env_u64("PORT", 8000) as u16,
             force_demo: env_bool("FORCE_DEMO", false)
                 || env_str("DATA_MODE", "real").eq_ignore_ascii_case("demo"),
+            invert_sides: env_bool("INVERT_SIDES", false),
             demo_fallback: env_bool("DEMO_FALLBACK", true),
             trading_mode: env_str("TRADING_MODE", "paper").to_lowercase(),
             scan_interval: env_u64("SCAN_INTERVAL", 3600),
@@ -259,6 +262,7 @@ impl Settings {
     pub fn public_settings(&self) -> Value {
         json!({
             "force_demo": self.force_demo,
+            "invert_sides": self.invert_sides,
             "demo_fallback": self.demo_fallback,
             "trading_mode": self.trading_mode,
             "scan_interval": self.scan_interval,
@@ -362,7 +366,7 @@ fn validate_admin_settings(values: &serde_json::Map<String, Value>) -> Result<()
             continue;
         };
         match *key {
-            "force_demo" | "demo_fallback" => {
+            "force_demo" | "invert_sides" | "demo_fallback" => {
                 if !value.is_boolean() {
                     return Err(format!("{key} must be boolean"));
                 }

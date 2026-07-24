@@ -31,6 +31,13 @@ impl Side {
             Side::Short => -1.0,
         }
     }
+
+    pub fn inverted(&self) -> Self {
+        match self {
+            Side::Long => Side::Short,
+            Side::Short => Side::Long,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

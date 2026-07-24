@@ -552,8 +552,12 @@ fn open_position(
     } else {
         format!(" · {context}")
     };
+    let inverted = state.positions[symbol].signal_snapshot["inverted_test"]
+        .as_bool()
+        .unwrap_or(false);
+    let execution_label = if inverted { " · INVERTED TEST" } else { "" };
     let message = format!(
-        "Paper {} @ {:.6} · stop {:.6} · target {:.6} · risk-to-stop {:.2} / budget {:.2} USDT{detail}",
+        "Paper {} @ {:.6} · stop {:.6} · target {:.6} · risk-to-stop {:.2} / budget {:.2} USDT{execution_label}{detail}",
         side.as_str(),
         fill.price,
         stop_price,
@@ -572,6 +576,7 @@ fn open_position(
         target: target_price,
         risk_budget,
         actual_risk,
+        inverted,
         net_rr: state.positions[symbol].signal_snapshot["net_rr"]
             .as_f64()
             .unwrap_or(0.0),
@@ -924,14 +929,23 @@ fn attempt_entry(
         return (false, trend);
     }
 
+    let execution_side = if SETTINGS.invert_sides {
+        side.inverted()
+    } else {
+        side
+    };
     let cost_pct = estimated_round_trip_cost_pct(bid, ask);
     let raw_stop_pct = SETTINGS.min_stop_pct.max(
         SETTINGS
             .max_stop_pct
             .min(SETTINGS.structure_buffer_pct + metrics.spread / 100.0 * 2.0),
     );
-    let touch = if side == Side::Long { ask } else { bid };
-    let stop = if side == Side::Long {
+    let touch = if execution_side == Side::Long {
+        ask
+    } else {
+        bid
+    };
+    let stop = if execution_side == Side::Long {
         wall * (1.0 - raw_stop_pct)
     } else {
         wall * (1.0 + raw_stop_pct)
@@ -953,7 +967,7 @@ fn attempt_entry(
         state.reject(symbol, &reason);
         return (false, trend);
     };
-    let target = touch * (1.0 + target_distance_pct * side.direction());
+    let target = touch * (1.0 + target_distance_pct * execution_side.direction());
     let net_rr = net_reward_risk(target_distance_pct, stop_distance_pct, cost_pct);
     if !net_rr.is_finite() || net_rr + 1e-12 < SETTINGS.min_net_reward_risk {
         state.pending_signals.remove(symbol);
@@ -969,12 +983,24 @@ fn attempt_entry(
         "spread_pct": metrics.spread, "cost_pct": cost_pct,
         "net_rr": net_rr, "target_r": effective_target_r,
         "target_distance_pct": target_distance_pct, "sequence": sequence,
+        "signal_side": side.as_str(), "execution_side": execution_side.as_str(),
+        "inverted_test": SETTINGS.invert_sides,
     });
     let context = format!(
-        "breakout-retest · score {score}/100 · net R/R {net_rr:.2} · target {effective_target_r:.2}R"
+        "breakout-retest · score {score}/100 · net R/R {net_rr:.2} · target {effective_target_r:.2}R{}",
+        if SETTINGS.invert_sides { " · INVERTED TEST" } else { "" }
     );
     let opened = open_position(
-        state, symbol, side, bid, ask, now, stop, target, snapshot, &context,
+        state,
+        symbol,
+        execution_side,
+        bid,
+        ask,
+        now,
+        stop,
+        target,
+        snapshot,
+        &context,
     );
     state.pending_signals.remove(symbol);
     (opened, trend)
