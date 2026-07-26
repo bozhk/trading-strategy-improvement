@@ -1,5 +1,6 @@
 use crate::models::{
-    now_ts, ClosedTrade, LogEvent, OrderBook, PendingSignal, Position, TradeTick, WallTrack,
+    now_ts, ClosedTrade, FvgSignal, LogEvent, OrderBook, PendingSignal, Position, TradeTick,
+    WallTrack,
 };
 use crate::readiness::live_readiness;
 use crate::telegram;
@@ -25,6 +26,7 @@ pub struct MarketState {
     pub cooldowns: HashMap<String, f64>,
     pub wall_tracks: HashMap<(String, &'static str), WallTrack>,
     pub pending_signals: HashMap<String, PendingSignal>,
+    pub pending_fvgs: HashMap<String, FvgSignal>,
     pub reject_counts: HashMap<String, u64>,
     pub data_quality_errors: u64,
     pub btc_mid_history: VecDeque<(f64, f64)>,

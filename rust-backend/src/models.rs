@@ -228,3 +228,13 @@ pub struct PendingSignal {
     pub score: i64,
     pub absorption: Absorption,
 }
+
+/// A completed three-candle fair value gap waiting for price to return.
+#[derive(Debug, Clone)]
+pub struct FvgSignal {
+    pub side: Side,
+    pub lower: f64,
+    pub upper: f64,
+    pub created: f64,
+    pub score: i64,
+}

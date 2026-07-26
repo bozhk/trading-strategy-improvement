@@ -95,6 +95,7 @@ async fn settings_status() -> Json<Value> {
     let state = STATE.lock();
     Json(json!({
         "mode": SETTINGS.trading_mode,
+        "strategy_mode": SETTINGS.strategy_mode,
         "source": state.source,
         "active_symbols": state.books.len(),
     }))
