@@ -1,7 +1,7 @@
 use crate::models::{
-    now_ts, ClosedTrade, FvgSignal, LogEvent, OrderBook, PendingSignal, Position, TradeTick,
-    WallTrack,
+    now_ts, ClosedTrade, LogEvent, OrderBook, PendingSignal, Position, TradeTick, WallTrack,
 };
+use crate::mtf_fvg::{MtfBars, MtfFvgTracker};
 use crate::readiness::live_readiness;
 use crate::telegram;
 use parking_lot::Mutex;
@@ -18,6 +18,8 @@ pub const BTC_HISTORY_MAXLEN: usize = 400;
 pub struct MarketState {
     pub books: HashMap<String, OrderBook>,
     pub trades: HashMap<String, VecDeque<TradeTick>>,
+    pub mtf_bars: HashMap<String, MtfBars>,
+    pub mtf_fvg: HashMap<String, MtfFvgTracker>,
     pub positions: HashMap<String, Position>,
     pub closed: VecDeque<ClosedTrade>,
     pub logs: VecDeque<LogEvent>,
@@ -26,7 +28,6 @@ pub struct MarketState {
     pub cooldowns: HashMap<String, f64>,
     pub wall_tracks: HashMap<(String, &'static str), WallTrack>,
     pub pending_signals: HashMap<String, PendingSignal>,
-    pub pending_fvgs: HashMap<String, FvgSignal>,
     pub reject_counts: HashMap<String, u64>,
     pub data_quality_errors: u64,
     pub btc_mid_history: VecDeque<(f64, f64)>,
@@ -49,6 +50,10 @@ impl MarketState {
     }
 
     pub fn push_tick(&mut self, symbol: &str, tick: TradeTick) {
+        self.mtf_bars
+            .entry(symbol.to_string())
+            .or_default()
+            .update(&tick);
         let queue = self.trades.entry(symbol.to_string()).or_default();
         if queue.len() >= TRADES_MAXLEN {
             queue.pop_front();
@@ -194,6 +199,10 @@ impl MarketState {
                 "exit_snapshot": t.exit_snapshot,
             })).collect::<Vec<_>>(),
             "radar": self.metrics.values().collect::<Vec<_>>(),
+            "mtf_fvg": self.mtf_fvg.iter().map(|(symbol, tracker)| json!({
+                "symbol": symbol,
+                "state": tracker.snapshot(),
+            })).collect::<Vec<_>>(),
             "positions": self.positions.values().map(|p| json!({
                 "symbol": p.symbol, "side": p.side.as_str(), "entry": p.entry,
                 "quantity": p.quantity, "opened_at": p.opened_at, "mark": p.mark,

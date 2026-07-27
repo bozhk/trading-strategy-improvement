@@ -1,5 +1,6 @@
 use crate::config::SETTINGS;
 use crate::models::{now_ts, TradeTick};
+use crate::mtf_fvg::{Candle, Timeframe};
 use crate::state::STATE;
 use futures_util::{SinkExt, StreamExt};
 use rand::rngs::SmallRng;
@@ -27,6 +28,10 @@ impl StreamManager {
             demo: false,
             generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub fn is_demo(&self) -> bool {
+        self.demo || SETTINGS.force_demo
     }
 
     pub async fn set_symbols(&mut self, mut symbols: Vec<String>, demo: bool) {
@@ -68,6 +73,8 @@ impl StreamManager {
             if source_changed {
                 state.books.clear();
                 state.trades.clear();
+                state.mtf_bars.clear();
+                state.mtf_fvg.clear();
                 state.metrics.clear();
             } else {
                 let retained: HashSet<&str> =
@@ -79,14 +86,22 @@ impl StreamManager {
                     .trades
                     .retain(|symbol, _| retained.contains(symbol.as_str()));
                 state
+                    .mtf_bars
+                    .retain(|symbol, _| retained.contains(symbol.as_str()));
+                state
+                    .mtf_fvg
+                    .retain(|symbol, _| retained.contains(symbol.as_str()));
+                state
                     .metrics
                     .retain(|symbol, _| retained.contains(symbol.as_str()));
             }
             state.wall_tracks.clear();
             state.pending_signals.clear();
+            state.mtf_fvg.clear();
             state.session += 1;
         }
         if demo {
+            seed_demo_mtf_history(&effective_symbols);
             let gen_ref = self.generation.clone();
             self.tasks.push(tokio::spawn(demo_feed(
                 effective_symbols,
@@ -103,6 +118,75 @@ impl StreamManager {
                     .push(tokio::spawn(live_feed(chunk.to_vec(), generation, gen_ref)));
             }
         }
+    }
+}
+
+fn demo_base(symbol: &str) -> f64 {
+    match symbol {
+        "BTCUSDT" => 66_500.0,
+        "ETHUSDT" => 3_480.0,
+        "SOLUSDT" => 148.0,
+        "XRPUSDT" => 0.52,
+        "DOGEUSDT" => 0.128,
+        "LINKUSDT" => 14.7,
+        "AVAXUSDT" => 31.2,
+        "SUIUSDT" => 0.91,
+        _ => 10.0,
+    }
+}
+
+fn demo_history(timeframe: Timeframe, base: f64, now: f64) -> Vec<Candle> {
+    let duration = timeframe.seconds();
+    let current_start = (now.floor() as i64).div_euclid(duration) * duration;
+    let mut candles: Vec<Candle> = (0..100)
+        .map(|index| {
+            let started_at = current_start - (100 - index) as i64 * duration;
+            let center = base * (1.0 + ((index as f64) / 9.0).sin() * 0.0008);
+            Candle {
+                timeframe,
+                started_at,
+                open: center * 0.9999,
+                high: center * 1.0003,
+                low: center * 0.9997,
+                close: center * 1.0001,
+                volume: 1_000.0,
+                trades: 0,
+            }
+        })
+        .collect();
+    if timeframe == Timeframe::M15 {
+        let len = candles.len();
+        let first = &mut candles[len - 3];
+        first.open = base * 0.9975;
+        first.high = base * 0.9982;
+        first.low = base * 0.9972;
+        first.close = base * 0.9980;
+        let middle = &mut candles[len - 2];
+        middle.open = base * 0.9980;
+        middle.high = base * 1.0002;
+        middle.low = base * 0.9978;
+        middle.close = base * 1.0000;
+        let last = &mut candles[len - 1];
+        last.open = base * 0.9990;
+        last.high = base * 1.0000;
+        last.low = base * 0.9988;
+        last.close = base * 0.9997;
+    }
+    candles
+}
+
+fn seed_demo_mtf_history(symbols: &[String]) {
+    if SETTINGS.strategy_mode != "fvg" {
+        return;
+    }
+    let now = now_ts();
+    let mut state = STATE.lock();
+    for symbol in symbols {
+        let base = demo_base(symbol);
+        let bars = state.mtf_bars.entry(symbol.clone()).or_default();
+        bars.seed(Timeframe::M15, demo_history(Timeframe::M15, base, now));
+        bars.seed(Timeframe::M1, demo_history(Timeframe::M1, base, now));
+        bars.mark_history_valid();
     }
 }
 
@@ -145,6 +229,18 @@ async fn live_feed(symbols: Vec<String>, generation: u64, gen_ref: Arc<AtomicU64
                 }
                 let mut state = STATE.lock();
                 state.connections = (state.connections - 1).max(0);
+                for symbol in &symbols {
+                    state.mtf_fvg.remove(symbol);
+                    if let Some(bars) = state.mtf_bars.get_mut(symbol) {
+                        bars.handle_disconnect(now_ts());
+                    }
+                }
+                state.log(
+                    "WARN",
+                    "MTF FVG state reset after market stream disconnect",
+                    "SYSTEM",
+                    10.0,
+                );
             }
             Err(exc) => {
                 let message = format!("Stream reconnecting: {:.70}", exc.to_string());
@@ -221,19 +317,6 @@ fn handle_message(msg: &Value) {
 /// structure: sinusoidal drift, biased walls at level 5, tape following bias.
 async fn demo_feed(symbols: Vec<String>, generation: u64, gen_ref: Arc<AtomicU64>) {
     let mut seed = SmallRng::seed_from_u64(73_421);
-    let base = |symbol: &str| -> f64 {
-        match symbol {
-            "BTCUSDT" => 66_500.0,
-            "ETHUSDT" => 3_480.0,
-            "SOLUSDT" => 148.0,
-            "XRPUSDT" => 0.52,
-            "DOGEUSDT" => 0.128,
-            "LINKUSDT" => 14.7,
-            "AVAXUSDT" => 31.2,
-            "SUIUSDT" => 0.91,
-            _ => 10.0,
-        }
-    };
     let mut ticks: u64 = 0;
     STATE.lock().connections = 1;
     while gen_ref.load(Ordering::SeqCst) == generation {
@@ -243,7 +326,7 @@ async fn demo_feed(symbols: Vec<String>, generation: u64, gen_ref: Arc<AtomicU64
             for (idx, symbol) in symbols.iter().enumerate() {
                 let t = ticks as f64;
                 let i = idx as f64;
-                let price = base(symbol)
+                let price = demo_base(symbol)
                     * (1.0 + (t / 37.0 + i).sin() * 0.0018 + seed.random_range(-0.00035..0.00035));
                 let bias = (t / 14.0 + i * 1.7).sin();
                 let mut bids = Vec::with_capacity(50);

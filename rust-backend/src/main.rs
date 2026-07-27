@@ -5,6 +5,7 @@ mod config;
 mod detail;
 mod execution;
 mod models;
+mod mtf_fvg;
 mod readiness;
 mod replay;
 mod scanner;

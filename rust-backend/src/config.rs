@@ -28,6 +28,21 @@ fn env_bool(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn env_list(name: &str, default: &[&str]) -> Vec<String> {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_uppercase())
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty())
+        .unwrap_or_else(|| default.iter().map(|value| value.to_string()).collect())
+}
+
 const ADMIN_SETTING_KEYS: &[&str] = &[
     "force_demo",
     "invert_sides",
@@ -82,6 +97,19 @@ const ADMIN_SETTING_KEYS: &[&str] = &[
     "fvg_min_stop_pct",
     "fvg_max_stop_pct",
     "fvg_stop_buffer_pct",
+    "fvg_m15_min_gap_atr",
+    "fvg_m15_min_displacement_atr",
+    "fvg_m15_min_body_ratio",
+    "fvg_m15_max_age_bars",
+    "fvg_m1_min_gap_atr",
+    "fvg_m1_min_displacement_atr",
+    "fvg_m1_min_body_ratio",
+    "fvg_m1_confirmation_bars",
+    "fvg_s5_min_gap_pct",
+    "fvg_s5_min_body_ratio",
+    "fvg_s5_inversion_bars",
+    "fvg_s5_retest_bars",
+    "fvg_s5_entry_depth",
     "min_live_trades",
     "min_live_profit_factor",
     "min_live_expectancy",
@@ -166,7 +194,7 @@ pub struct Settings {
     pub alternative_max_stop_pct: f64,
     pub alternative_structure_buffer_pct: f64,
 
-    // FVG: three-candle imbalance followed by a return to the gap.
+    // Legacy single-timeframe FVG settings retained for persisted configuration.
     pub fvg_candle_seconds: f64,
     pub fvg_min_gap_pct: f64,
     pub fvg_signal_expiry_seconds: f64,
@@ -179,12 +207,27 @@ pub struct Settings {
     pub fvg_max_stop_pct: f64,
     pub fvg_stop_buffer_pct: f64,
 
+    // M15 context -> M1 confirmation -> S5 inverse-FVG retest.
+    pub fvg_m15_min_gap_atr: f64,
+    pub fvg_m15_min_displacement_atr: f64,
+    pub fvg_m15_min_body_ratio: f64,
+    pub fvg_m15_max_age_bars: u32,
+    pub fvg_m1_min_gap_atr: f64,
+    pub fvg_m1_min_displacement_atr: f64,
+    pub fvg_m1_min_body_ratio: f64,
+    pub fvg_m1_confirmation_bars: u32,
+    pub fvg_s5_min_gap_pct: f64,
+    pub fvg_s5_min_body_ratio: f64,
+    pub fvg_s5_inversion_bars: u32,
+    pub fvg_s5_retest_bars: u32,
+    pub fvg_s5_entry_depth: f64,
+
     // Readiness gate.
     pub min_live_trades: usize,
     pub min_live_profit_factor: f64,
     pub min_live_expectancy: f64,
     pub max_live_drawdown_pct: f64,
-    pub demo_symbols: Vec<&'static str>,
+    pub demo_symbols: Vec<String>,
 }
 
 impl Settings {
@@ -202,28 +245,28 @@ impl Settings {
             strategy_mode: env_str("STRATEGY_MODE", "alternative").to_lowercase(),
             scan_interval: env_u64("SCAN_INTERVAL", 3600),
             max_symbols: env_u64("MAX_SYMBOLS", 40) as usize,
-            min_turnover: 10_000_000.0,
-            min_price: 0.005,
-            max_spread_pct: 0.10,
-            ws_chunk_size: 20,
+            min_turnover: env_f64("MIN_TURNOVER", 10_000_000.0),
+            min_price: env_f64("MIN_PRICE", 0.005),
+            max_spread_pct: env_f64("MAX_SPREAD_PCT", 0.10),
+            ws_chunk_size: env_u64("WS_CHUNK_SIZE", 20) as usize,
             taker_fee_pct: env_f64("TAKER_FEE_PCT", 0.00050),
             slippage_pct: env_f64("SLIPPAGE_PCT", 0.00030),
-            cost_safety_multiplier: 1.35,
+            cost_safety_multiplier: env_f64("COST_SAFETY_MULTIPLIER", 1.35),
             max_holding_seconds: env_f64("MAX_HOLDING_SECONDS", 900.0),
-            trail_arm_r: 1.0,
-            trail_giveback_r: 0.55,
-            breakeven_arm_r: 0.8,
+            trail_arm_r: env_f64("TRAIL_ARM_R", 1.0),
+            trail_giveback_r: env_f64("TRAIL_GIVEBACK_R", 0.55),
+            breakeven_arm_r: env_f64("BREAKEVEN_ARM_R", 0.8),
             reversal_confirm_ticks: env_u64("REVERSAL_CONFIRM_TICKS", 3) as u32,
             reversal_confirm_seconds: env_f64("REVERSAL_CONFIRM_SECONDS", 3.0),
             reversal_min_hold_seconds: env_f64("REVERSAL_MIN_HOLD_SECONDS", 30.0),
             account_equity: env_f64("ACCOUNT_EQUITY", env_f64("PAPER_EQUITY", 10_000.0)),
             risk_per_trade_pct: env_f64("RISK_PER_TRADE_PCT", 0.0025),
-            max_position_notional: 1_000.0,
-            max_open_positions: 2,
-            max_daily_loss_pct: 0.015,
-            max_consecutive_losses: 4,
-            cooldown_seconds: 180.0,
-            loss_cooldown_seconds: 900.0,
+            max_position_notional: env_f64("MAX_POSITION_NOTIONAL", 1_000.0),
+            max_open_positions: env_u64("MAX_OPEN_POSITIONS", 2) as usize,
+            max_daily_loss_pct: env_f64("MAX_DAILY_LOSS_PCT", 0.015),
+            max_consecutive_losses: env_u64("MAX_CONSECUTIVE_LOSSES", 4) as usize,
+            cooldown_seconds: env_f64("COOLDOWN_SECONDS", 180.0),
+            loss_cooldown_seconds: env_f64("LOSS_COOLDOWN_SECONDS", 900.0),
             alternative_wall_multiplier: env_f64("ALTERNATIVE_WALL_MULTIPLIER", 15.0),
             alternative_signal_expiry_seconds: env_f64("ALTERNATIVE_SIGNAL_EXPIRY_SECONDS", 8.0),
             alternative_retest_tolerance_pct: env_f64("ALTERNATIVE_RETEST_TOLERANCE_PCT", 0.0008),
@@ -236,7 +279,7 @@ impl Settings {
             alternative_min_stop_pct: env_f64("ALTERNATIVE_MIN_STOP_PCT", 0.0020),
             alternative_max_stop_pct: env_f64("ALTERNATIVE_MAX_STOP_PCT", 0.0075),
             alternative_structure_buffer_pct: env_f64("ALTERNATIVE_STRUCTURE_BUFFER_PCT", 0.0008),
-            fvg_candle_seconds: env_f64("FVG_CANDLE_SECONDS", 5.0),
+            fvg_candle_seconds: env_f64("FVG_CANDLE_SECONDS", 300.0),
             fvg_min_gap_pct: env_f64("FVG_MIN_GAP_PCT", 0.0008),
             fvg_signal_expiry_seconds: env_f64("FVG_SIGNAL_EXPIRY_SECONDS", 120.0),
             fvg_entry_depth: env_f64("FVG_ENTRY_DEPTH", 0.5),
@@ -247,14 +290,30 @@ impl Settings {
             fvg_min_stop_pct: env_f64("FVG_MIN_STOP_PCT", 0.0020),
             fvg_max_stop_pct: env_f64("FVG_MAX_STOP_PCT", 0.0075),
             fvg_stop_buffer_pct: env_f64("FVG_STOP_BUFFER_PCT", 0.0008),
-            min_live_trades: 200,
-            min_live_profit_factor: 1.20,
-            min_live_expectancy: 0.0,
-            max_live_drawdown_pct: 0.10,
-            demo_symbols: vec![
-                "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT",
-                "SUIUSDT",
-            ],
+            fvg_m15_min_gap_atr: env_f64("FVG_M15_MIN_GAP_ATR", 0.10),
+            fvg_m15_min_displacement_atr: env_f64("FVG_M15_MIN_DISPLACEMENT_ATR", 1.0),
+            fvg_m15_min_body_ratio: env_f64("FVG_M15_MIN_BODY_RATIO", 0.60),
+            fvg_m15_max_age_bars: env_u64("FVG_M15_MAX_AGE_BARS", 16) as u32,
+            fvg_m1_min_gap_atr: env_f64("FVG_M1_MIN_GAP_ATR", 0.05),
+            fvg_m1_min_displacement_atr: env_f64("FVG_M1_MIN_DISPLACEMENT_ATR", 0.8),
+            fvg_m1_min_body_ratio: env_f64("FVG_M1_MIN_BODY_RATIO", 0.60),
+            fvg_m1_confirmation_bars: env_u64("FVG_M1_CONFIRMATION_BARS", 15) as u32,
+            fvg_s5_min_gap_pct: env_f64("FVG_S5_MIN_GAP_PCT", 0.00015),
+            fvg_s5_min_body_ratio: env_f64("FVG_S5_MIN_BODY_RATIO", 0.55),
+            fvg_s5_inversion_bars: env_u64("FVG_S5_INVERSION_BARS", 24) as u32,
+            fvg_s5_retest_bars: env_u64("FVG_S5_RETEST_BARS", 12) as u32,
+            fvg_s5_entry_depth: env_f64("FVG_S5_ENTRY_DEPTH", 0.50),
+            min_live_trades: env_u64("MIN_LIVE_TRADES", 200) as usize,
+            min_live_profit_factor: env_f64("MIN_LIVE_PROFIT_FACTOR", 1.20),
+            min_live_expectancy: env_f64("MIN_LIVE_EXPECTANCY", 0.0),
+            max_live_drawdown_pct: env_f64("MAX_LIVE_DRAWDOWN_PCT", 0.10),
+            demo_symbols: env_list(
+                "DEMO_SYMBOLS",
+                &[
+                    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT",
+                    "SUIUSDT",
+                ],
+            ),
         }
     }
 
@@ -283,11 +342,35 @@ impl Settings {
             "Strategy max target settings must be positive"
         );
         assert!(
+            self.alternative_min_stop_pct > 0.0
+                && self.alternative_min_stop_pct <= self.alternative_max_stop_pct
+                && self.fvg_min_stop_pct > 0.0
+                && self.fvg_min_stop_pct <= self.fvg_max_stop_pct,
+            "Strategy stop ranges are invalid"
+        );
+        assert!(self.ws_chunk_size > 0, "WS_CHUNK_SIZE must be positive");
+        assert!(
             self.fvg_candle_seconds > 0.0
                 && self.fvg_min_gap_pct > 0.0
                 && self.fvg_signal_expiry_seconds > 0.0
                 && (0.0..=1.0).contains(&self.fvg_entry_depth),
             "FVG settings are invalid"
+        );
+        assert!(
+            self.fvg_m15_min_gap_atr > 0.0
+                && self.fvg_m15_min_displacement_atr > 0.0
+                && (0.0..=1.0).contains(&self.fvg_m15_min_body_ratio)
+                && self.fvg_m15_max_age_bars > 0
+                && self.fvg_m1_min_gap_atr > 0.0
+                && self.fvg_m1_min_displacement_atr > 0.0
+                && (0.0..=1.0).contains(&self.fvg_m1_min_body_ratio)
+                && self.fvg_m1_confirmation_bars > 0
+                && self.fvg_s5_min_gap_pct > 0.0
+                && (0.0..=1.0).contains(&self.fvg_s5_min_body_ratio)
+                && self.fvg_s5_inversion_bars > 0
+                && self.fvg_s5_retest_bars > 0
+                && (0.0..=1.0).contains(&self.fvg_s5_entry_depth),
+            "MTF FVG settings are invalid"
         );
         assert!(
             self.reversal_confirm_ticks > 0
@@ -371,6 +454,19 @@ impl Settings {
             "fvg_min_stop_pct": self.fvg_min_stop_pct,
             "fvg_max_stop_pct": self.fvg_max_stop_pct,
             "fvg_stop_buffer_pct": self.fvg_stop_buffer_pct,
+            "fvg_m15_min_gap_atr": self.fvg_m15_min_gap_atr,
+            "fvg_m15_min_displacement_atr": self.fvg_m15_min_displacement_atr,
+            "fvg_m15_min_body_ratio": self.fvg_m15_min_body_ratio,
+            "fvg_m15_max_age_bars": self.fvg_m15_max_age_bars,
+            "fvg_m1_min_gap_atr": self.fvg_m1_min_gap_atr,
+            "fvg_m1_min_displacement_atr": self.fvg_m1_min_displacement_atr,
+            "fvg_m1_min_body_ratio": self.fvg_m1_min_body_ratio,
+            "fvg_m1_confirmation_bars": self.fvg_m1_confirmation_bars,
+            "fvg_s5_min_gap_pct": self.fvg_s5_min_gap_pct,
+            "fvg_s5_min_body_ratio": self.fvg_s5_min_body_ratio,
+            "fvg_s5_inversion_bars": self.fvg_s5_inversion_bars,
+            "fvg_s5_retest_bars": self.fvg_s5_retest_bars,
+            "fvg_s5_entry_depth": self.fvg_s5_entry_depth,
             "min_live_trades": self.min_live_trades,
             "min_live_profit_factor": self.min_live_profit_factor,
             "min_live_expectancy": self.min_live_expectancy,
@@ -470,6 +566,15 @@ fn validate_admin_settings(values: &serde_json::Map<String, Value>) -> Result<()
                     return Err("strategy_mode must be alternative or fvg".to_string());
                 }
             }
+            "ws_chunk_size"
+            | "fvg_m15_max_age_bars"
+            | "fvg_m1_confirmation_bars"
+            | "fvg_s5_inversion_bars"
+            | "fvg_s5_retest_bars" => {
+                if !value.as_u64().is_some_and(|value| value > 0) {
+                    return Err(format!("{key} must be a positive integer"));
+                }
+            }
             _ => {
                 if !value.as_f64().map(f64::is_finite).unwrap_or(false) {
                     return Err(format!("{key} must be a finite number"));
@@ -501,6 +606,50 @@ fn validate_admin_settings(values: &serde_json::Map<String, Value>) -> Result<()
         .is_some_and(|depth| !(0.0..=1.0).contains(&depth))
     {
         return Err("fvg_entry_depth must be between 0 and 1".to_string());
+    }
+    for key in [
+        "fvg_m15_min_body_ratio",
+        "fvg_m1_min_body_ratio",
+        "fvg_s5_min_body_ratio",
+        "fvg_s5_entry_depth",
+    ] {
+        if values
+            .get(key)
+            .and_then(Value::as_f64)
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        {
+            return Err(format!("{key} must be between 0 and 1"));
+        }
+    }
+    for key in [
+        "fvg_m15_min_gap_atr",
+        "fvg_m15_min_displacement_atr",
+        "fvg_m1_min_gap_atr",
+        "fvg_m1_min_displacement_atr",
+        "fvg_s5_min_gap_pct",
+    ] {
+        if values
+            .get(key)
+            .and_then(Value::as_f64)
+            .is_some_and(|value| value <= 0.0)
+        {
+            return Err(format!("{key} must be positive"));
+        }
+    }
+    for (minimum_key, maximum_key) in [
+        ("alternative_min_stop_pct", "alternative_max_stop_pct"),
+        ("fvg_min_stop_pct", "fvg_max_stop_pct"),
+    ] {
+        if values
+            .get(minimum_key)
+            .and_then(Value::as_f64)
+            .zip(values.get(maximum_key).and_then(Value::as_f64))
+            .is_some_and(|(minimum, maximum)| minimum <= 0.0 || minimum > maximum)
+        {
+            return Err(format!(
+                "{minimum_key} must be positive and no greater than {maximum_key}"
+            ));
+        }
     }
     Ok(())
 }

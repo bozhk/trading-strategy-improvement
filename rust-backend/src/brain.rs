@@ -4,9 +4,9 @@ use crate::execution::{
     net_reward_risk, stop_loss_per_unit, trade_pnl,
 };
 use crate::models::{
-    now_ts, Absorption, ClosedTrade, FvgSignal, OrderBook, PendingSignal, Position, Side,
-    TradeTick, WallTrack,
+    now_ts, Absorption, ClosedTrade, OrderBook, PendingSignal, Position, Side, TradeTick, WallTrack,
 };
+use crate::mtf_fvg::MtfConfig;
 use crate::state::{MarketState, BTC_HISTORY_MAXLEN, STATE};
 use crate::telegram::{self, EntryNotification, ExitNotification};
 use serde_json::{json, Value};
@@ -507,6 +507,14 @@ fn open_position(
     context: &str,
 ) -> bool {
     let touch = if side == Side::Long { ask } else { bid };
+    let stop_is_valid = match side {
+        Side::Long => stop_price < touch,
+        Side::Short => stop_price > touch,
+    };
+    if !stop_is_valid {
+        state.reject(symbol, "stop must be on the loss side of entry");
+        return false;
+    }
     let stop_distance = (touch - stop_price).abs();
     let loss_per_unit = stop_loss_per_unit(side, bid, ask, stop_price);
     if stop_distance <= 0.0 || !loss_per_unit.is_finite() || loss_per_unit <= 0.0 {
@@ -1008,75 +1016,7 @@ fn attempt_entry(
     (opened, trend)
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Candle {
-    started_at: f64,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-}
-
-fn completed_candles(ticks: &VecDeque<TradeTick>, now: f64) -> Vec<Candle> {
-    let duration = SETTINGS.fvg_candle_seconds;
-    let mut candles: Vec<Candle> = Vec::new();
-    for tick in ticks {
-        if !tick.price.is_finite() || tick.price <= 0.0 {
-            continue;
-        }
-        let started_at = (tick.timestamp / duration).floor() * duration;
-        if let Some(candle) = candles.last_mut().filter(|c| c.started_at == started_at) {
-            candle.high = candle.high.max(tick.price);
-            candle.low = candle.low.min(tick.price);
-            candle.close = tick.price;
-        } else {
-            candles.push(Candle {
-                started_at,
-                open: tick.price,
-                high: tick.price,
-                low: tick.price,
-                close: tick.price,
-            });
-        }
-    }
-    candles.retain(|candle| candle.started_at + duration <= now);
-    candles
-}
-
-fn newest_fvg(ticks: &VecDeque<TradeTick>, now: f64) -> Option<FvgSignal> {
-    let candles = completed_candles(ticks, now);
-    let [first, middle, last] = candles.last_chunk::<3>()?;
-    let bullish_gap = last.low - first.high;
-    let bearish_gap = first.low - last.high;
-    let (side, lower, upper, gap) = if bullish_gap > 0.0 {
-        (Side::Long, first.high, last.low, bullish_gap)
-    } else if bearish_gap > 0.0 {
-        (Side::Short, last.high, first.low, bearish_gap)
-    } else {
-        return None;
-    };
-    let gap_pct = gap / ((lower + upper) / 2.0);
-    if gap_pct < SETTINGS.fvg_min_gap_pct {
-        return None;
-    }
-    let directional_middle = if side == Side::Long {
-        middle.close > middle.open
-    } else {
-        middle.close < middle.open
-    };
-    if !directional_middle {
-        return None;
-    }
-    Some(FvgSignal {
-        side,
-        lower,
-        upper,
-        created: last.started_at + SETTINGS.fvg_candle_seconds,
-        score: 0,
-    })
-}
-
-fn attempt_fvg_entry(
+fn attempt_mtf_fvg_entry(
     state: &mut MarketState,
     symbol: &str,
     now: f64,
@@ -1115,85 +1055,55 @@ fn attempt_fvg_entry(
         return (false, trend);
     }
 
-    let Some(mut signal) = state.pending_fvgs.get(symbol).cloned() else {
+    let Some(setup) = state
+        .mtf_fvg
+        .get(symbol)
+        .and_then(|tracker| tracker.ready())
+        .cloned()
+    else {
         return (false, trend);
     };
-    if now - signal.created > SETTINGS.fvg_signal_expiry_seconds {
-        state.pending_fvgs.remove(symbol);
-        state.reject(symbol, "FVG expired before return");
-        return (false, trend);
-    }
-
-    let (btc_allowed, trend) = btc_allows(state, symbol, signal.side, now);
-    let directional_imbalance = if signal.side == Side::Long {
-        metrics.imbalance >= ENTRY_IMBALANCE_LONG
-    } else {
-        metrics.imbalance <= ENTRY_IMBALANCE_SHORT
-    };
-    let directional_tape = if signal.side == Side::Long {
-        metrics.tape.buy_accelerating
-    } else {
-        metrics.tape.sell_accelerating
-    };
-    signal.score = 30
-        + 25 * i64::from(btc_allowed)
-        + 20 * i64::from(directional_imbalance)
-        + 15 * i64::from(directional_tape)
-        + 10 * i64::from(metrics.freshness <= 1.0);
-    if signal.score < SETTINGS.fvg_min_confluence_score {
-        let reason = format!(
-            "FVG confluence {}/100 below {}",
-            signal.score, SETTINGS.fvg_min_confluence_score
-        );
-        state.reject(symbol, &reason);
-        return (false, trend);
-    }
-
-    let gap = signal.upper - signal.lower;
-    let entry_level = if signal.side == Side::Long {
-        signal.upper - gap * SETTINGS.fvg_entry_depth
-    } else {
-        signal.lower + gap * SETTINGS.fvg_entry_depth
-    };
-    let price_invalidated = if signal.side == Side::Long {
-        metrics.bid < signal.lower
-    } else {
-        metrics.ask > signal.upper
-    };
-    if price_invalidated {
-        state.pending_fvgs.remove(symbol);
-        state.reject(symbol, "FVG invalidated before entry");
-        return (false, trend);
-    }
-    let returned_to_entry = if signal.side == Side::Long {
-        metrics.bid <= entry_level
-    } else {
-        metrics.ask >= entry_level
-    };
-    if !returned_to_entry {
-        state.pending_fvgs.insert(symbol.to_string(), signal);
-        return (false, trend);
-    }
-
     let execution_side = if SETTINGS.invert_sides {
-        signal.side.inverted()
+        setup.side.inverted()
     } else {
-        signal.side
+        setup.side
     };
     let touch = if execution_side == Side::Long {
         metrics.ask
     } else {
         metrics.bid
     };
-    let raw_stop_pct = SETTINGS.fvg_min_stop_pct.max(
-        SETTINGS
-            .fvg_max_stop_pct
-            .min(gap / touch + SETTINGS.fvg_stop_buffer_pct),
-    );
-    let stop = if execution_side == Side::Long {
-        signal.lower * (1.0 - raw_stop_pct)
+    let structural_stop = if execution_side == Side::Long {
+        setup.trigger.lower * (1.0 - SETTINGS.fvg_stop_buffer_pct)
     } else {
-        signal.upper * (1.0 + raw_stop_pct)
+        setup.trigger.upper * (1.0 + SETTINGS.fvg_stop_buffer_pct)
+    };
+    let stop_is_structural = match execution_side {
+        Side::Long => structural_stop < touch,
+        Side::Short => structural_stop > touch,
+    };
+    if !stop_is_structural {
+        if let Some(tracker) = state.mtf_fvg.get_mut(symbol) {
+            tracker.reject_ready("price crossed structural stop before execution");
+        }
+        state.reject(
+            symbol,
+            "MTF FVG price crossed structural stop before execution",
+        );
+        return (false, trend);
+    }
+    let structural_distance_pct = (touch - structural_stop).abs() / touch;
+    if structural_distance_pct > SETTINGS.fvg_max_stop_pct {
+        if let Some(tracker) = state.mtf_fvg.get_mut(symbol) {
+            tracker.reject_ready("structural stop exceeds maximum");
+        }
+        state.reject(symbol, "MTF FVG structural stop exceeds configured maximum");
+        return (false, trend);
+    }
+    let stop = if structural_distance_pct < SETTINGS.fvg_min_stop_pct {
+        touch * (1.0 - SETTINGS.fvg_min_stop_pct * execution_side.direction())
+    } else {
+        structural_stop
     };
     let stop_distance_pct = (touch - stop).abs() / touch;
     let cost_pct = estimated_round_trip_cost_pct(metrics.bid, metrics.ask);
@@ -1204,15 +1114,22 @@ fn attempt_fvg_entry(
         SETTINGS.fvg_min_net_reward_risk,
         SETTINGS.fvg_max_target_pct,
     ) else {
-        state.pending_fvgs.remove(symbol);
-        state.reject(symbol, "FVG after-cost target exceeds configured maximum");
+        if let Some(tracker) = state.mtf_fvg.get_mut(symbol) {
+            tracker.reject_ready("after-cost target exceeds maximum");
+        }
+        state.reject(
+            symbol,
+            "MTF FVG after-cost target exceeds configured maximum",
+        );
         return (false, trend);
     };
     let target = touch * (1.0 + target_distance_pct * execution_side.direction());
     let net_rr = net_reward_risk(target_distance_pct, stop_distance_pct, cost_pct);
     if !net_rr.is_finite() || net_rr + 1e-12 < SETTINGS.fvg_min_net_reward_risk {
-        state.pending_fvgs.remove(symbol);
-        state.reject(symbol, "FVG after-cost R/R invariant failed");
+        if let Some(tracker) = state.mtf_fvg.get_mut(symbol) {
+            tracker.reject_ready("after-cost R/R failed");
+        }
+        state.reject(symbol, "MTF FVG after-cost R/R invariant failed");
         return (false, trend);
     }
     let effective_target_r = target_distance_pct / stop_distance_pct;
@@ -1222,19 +1139,23 @@ fn attempt_fvg_entry(
         .map(|book| book.sequence)
         .unwrap_or(0);
     let snapshot = json!({
-        "strategy_mode": "fvg", "fvg_lower": signal.lower, "fvg_upper": signal.upper,
-        "fvg_entry": entry_level, "score": signal.score, "imbalance": metrics.imbalance,
+        "strategy_mode": "fvg", "fvg_model": "M15-M1-S5_IFVG",
+        "m15_lower": setup.context.lower, "m15_upper": setup.context.upper,
+        "m1_lower": setup.confirmation.lower, "m1_upper": setup.confirmation.upper,
+        "s5_lower": setup.trigger.lower, "s5_upper": setup.trigger.upper,
+        "context_touched_at": setup.context_touched_at,
+        "s5_inverted_at": setup.inverted_at, "s5_retested_at": setup.retested_at,
+        "fvg_entry": setup.entry_level, "imbalance": metrics.imbalance,
         "flow": metrics.flow, "btc_trend": trend.direction, "spread_pct": metrics.spread,
         "cost_pct": cost_pct, "net_rr": net_rr, "target_r": effective_target_r,
         "target_distance_pct": target_distance_pct, "sequence": sequence,
-        "signal_side": signal.side.as_str(), "execution_side": execution_side.as_str(),
+        "signal_side": setup.side.as_str(), "execution_side": execution_side.as_str(),
         "inverted_test": SETTINGS.invert_sides,
     });
     let context = format!(
-        "FVG return {:.6}-{:.6} · score {}/100 · net R/R {:.2} · target {:.2}R{}",
-        signal.lower,
-        signal.upper,
-        signal.score,
+        "M15→M1→S5 iFVG {:.6}-{:.6} · net R/R {:.2} · target {:.2}R{}",
+        setup.trigger.lower,
+        setup.trigger.upper,
         net_rr,
         effective_target_r,
         if SETTINGS.invert_sides {
@@ -1255,7 +1176,9 @@ fn attempt_fvg_entry(
         snapshot,
         &context,
     );
-    state.pending_fvgs.remove(symbol);
+    if let Some(tracker) = state.mtf_fvg.get_mut(symbol) {
+        tracker.mark_entry_consumed();
+    }
     (opened, trend)
 }
 
@@ -1266,6 +1189,7 @@ fn metrics_to_radar(
     trend: &BtcTrend,
     bid_absorption: &Option<Absorption>,
     ask_absorption: &Option<Absorption>,
+    mtf_state: Value,
 ) -> Value {
     let absorption_json = |a: &Option<Absorption>| -> Value {
         match a {
@@ -1282,6 +1206,7 @@ fn metrics_to_radar(
     json!({
         "symbol": symbol,
         "strategy_mode": SETTINGS.strategy_mode,
+        "mtf_fvg": mtf_state,
         "status": status,
         "price": metrics.mid,
         "imbalance": metrics.imbalance,
@@ -1363,6 +1288,11 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
             &trend,
             &bid_absorption,
             &ask_absorption,
+            state
+                .mtf_fvg
+                .get(symbol)
+                .map(|tracker| tracker.snapshot())
+                .unwrap_or(Value::Null),
         );
         state.metrics.insert(symbol.to_string(), radar);
         return;
@@ -1376,6 +1306,11 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
             &trend,
             &bid_absorption,
             &ask_absorption,
+            state
+                .mtf_fvg
+                .get(symbol)
+                .map(|tracker| tracker.snapshot())
+                .unwrap_or(Value::Null),
         );
         state.metrics.insert(symbol.to_string(), radar);
         return;
@@ -1390,6 +1325,11 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
             &trend,
             &bid_absorption,
             &ask_absorption,
+            state
+                .mtf_fvg
+                .get(symbol)
+                .map(|tracker| tracker.snapshot())
+                .unwrap_or(Value::Null),
         );
         state.metrics.insert(symbol.to_string(), radar);
         return;
@@ -1403,6 +1343,11 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
             &trend,
             &bid_absorption,
             &ask_absorption,
+            state
+                .mtf_fvg
+                .get(symbol)
+                .map(|tracker| tracker.snapshot())
+                .unwrap_or(Value::Null),
         );
         state.metrics.insert(symbol.to_string(), radar);
         return;
@@ -1424,25 +1369,20 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
             (entered, trend) = attempt_entry(state, symbol, side, now, &metrics, &absorption);
         }
     } else {
-        let ticks = state.trades.get(symbol).unwrap_or(&empty);
-        if let Some(signal) = newest_fvg(ticks, now) {
-            let should_replace = state
-                .pending_fvgs
-                .get(symbol)
-                .map(|pending| signal.created > pending.created)
-                .unwrap_or(true);
-            if should_replace {
-                let message = format!(
-                    "{} FVG {:.6}-{:.6} detected; waiting return",
-                    signal.side.as_str(),
-                    signal.lower,
-                    signal.upper
-                );
-                state.log("SETUP", &message, symbol, 0.0);
-                state.pending_fvgs.insert(symbol.to_string(), signal);
-            }
+        let bars = state.mtf_bars.get(symbol).cloned().unwrap_or_default();
+        let config = MtfConfig::from(&*SETTINGS);
+        let tracker = state.mtf_fvg.entry(symbol.to_string()).or_default();
+        let previous_phase = tracker.phase_name();
+        tracker.advance(&bars, now, metrics.mid, &config);
+        let phase = tracker.phase_name();
+        if phase != previous_phase {
+            let message = format!(
+                "MTF FVG {previous_phase} → {phase} · {}",
+                tracker.last_reason
+            );
+            state.log("SETUP", &message, symbol, 0.0);
         }
-        (entered, trend) = attempt_fvg_entry(state, symbol, now, &metrics);
+        (entered, trend) = attempt_mtf_fvg_entry(state, symbol, now, &metrics);
     }
 
     let status = if entered {
@@ -1451,10 +1391,16 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
             .get(symbol)
             .map(|p| p.side.as_str())
             .unwrap_or("WATCH")
+    } else if SETTINGS.strategy_mode == "fvg" {
+        state
+            .mtf_fvg
+            .get(symbol)
+            .map(|tracker| tracker.phase_name())
+            .unwrap_or("WAIT_M15_CONTEXT")
     } else {
         "WATCH"
     };
-    if !entered {
+    if !entered && SETTINGS.strategy_mode == "alternative" {
         if (metrics.imbalance - 0.5).abs() < 0.1 {
             state.log("SKIP", "TIMEOUT / SKIPPED · low imbalance", symbol, 8.0);
         } else if !metrics.tape.buy_accelerating && !metrics.tape.sell_accelerating {
@@ -1473,6 +1419,11 @@ pub fn evaluate_symbol(state: &mut MarketState, symbol: &str, now: f64) {
         &trend,
         &bid_absorption,
         &ask_absorption,
+        state
+            .mtf_fvg
+            .get(symbol)
+            .map(|tracker| tracker.snapshot())
+            .unwrap_or(Value::Null),
     );
     state.metrics.insert(symbol.to_string(), radar);
 }
@@ -1486,7 +1437,7 @@ pub async fn brain_loop() {
             if session != state.session {
                 state.wall_tracks.clear();
                 state.pending_signals.clear();
-                state.pending_fvgs.clear();
+                state.mtf_fvg.clear();
                 state.btc_mid_history.clear();
                 session = state.session;
             }
@@ -1509,9 +1460,7 @@ pub async fn brain_loop() {
 
 #[cfg(test)]
 mod tests {
-    use super::{loss_streak_pause_until, newest_fvg, reversal_is_confirmed};
-    use crate::models::{Side, TradeTick};
-    use std::collections::VecDeque;
+    use super::{loss_streak_pause_until, reversal_is_confirmed};
 
     #[test]
     fn loss_streak_breaker_has_a_finite_pause() {
@@ -1530,52 +1479,5 @@ mod tests {
         assert!(!reversal_is_confirmed(3, 10.0, 0.0, 12.0));
         assert!(!reversal_is_confirmed(3, 29.0, 0.0, 31.0));
         assert!(reversal_is_confirmed(3, 10.0, 0.0, 40.0));
-    }
-
-    #[test]
-    fn detects_a_bullish_three_candle_fvg() {
-        let ticks = VecDeque::from([
-            TradeTick {
-                timestamp: 0.5,
-                is_buy: true,
-                price: 100.0,
-                size: 1.0,
-            },
-            TradeTick {
-                timestamp: 4.5,
-                is_buy: true,
-                price: 101.0,
-                size: 1.0,
-            },
-            TradeTick {
-                timestamp: 5.5,
-                is_buy: true,
-                price: 102.0,
-                size: 1.0,
-            },
-            TradeTick {
-                timestamp: 9.5,
-                is_buy: true,
-                price: 104.0,
-                size: 1.0,
-            },
-            TradeTick {
-                timestamp: 10.5,
-                is_buy: true,
-                price: 105.0,
-                size: 1.0,
-            },
-            TradeTick {
-                timestamp: 14.5,
-                is_buy: true,
-                price: 106.0,
-                size: 1.0,
-            },
-        ]);
-
-        let signal = newest_fvg(&ticks, 16.0).expect("bullish gap should be detected");
-        assert_eq!(signal.side, Side::Long);
-        assert_eq!(signal.lower, 101.0);
-        assert_eq!(signal.upper, 105.0);
     }
 }

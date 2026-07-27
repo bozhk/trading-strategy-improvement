@@ -11,7 +11,7 @@ pub fn now_ts() -> f64 {
         .unwrap_or(0.0)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Side {
     Long,
@@ -227,14 +227,4 @@ pub struct PendingSignal {
     #[allow(dead_code)] // recorded for parity with the Python engine
     pub score: i64,
     pub absorption: Absorption,
-}
-
-/// A completed three-candle fair value gap waiting for price to return.
-#[derive(Debug, Clone)]
-pub struct FvgSignal {
-    pub side: Side,
-    pub lower: f64,
-    pub upper: f64,
-    pub created: f64,
-    pub score: i64,
 }

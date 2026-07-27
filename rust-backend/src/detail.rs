@@ -105,6 +105,11 @@ pub fn build_symbol_detail(state: &MarketState, symbol: &str) -> Option<Value> {
     let f = |key: &str, default: f64| metrics[key].as_f64().unwrap_or(default);
     let buy_accelerating = metrics["buy_accelerating"].as_bool().unwrap_or(false);
     let sell_accelerating = metrics["sell_accelerating"].as_bool().unwrap_or(false);
+    let mtf_fvg = state
+        .mtf_fvg
+        .get(symbol)
+        .map(|tracker| tracker.snapshot())
+        .unwrap_or(Value::Null);
 
     Some(json!({
         "symbol": symbol,
@@ -135,6 +140,7 @@ pub fn build_symbol_detail(state: &MarketState, symbol: &str) -> Option<Value> {
             "sell_dominance": f("sell_dominance", 0.5),
             "flow": f("flow", 0.5),
             "imbalance": f("imbalance", 0.5),
+            "mtf_fvg": mtf_fvg,
         },
         "history": symbol_history(state, symbol),
     }))
