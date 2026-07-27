@@ -57,6 +57,7 @@ const ADMIN_SETTING_KEYS: &[&str] = &[
     "demo_symbols",
     "trading_mode",
     "strategy_mode",
+    "settings_profile",
     "account_equity",
     "risk_per_trade_pct",
     "max_position_notional",
@@ -116,6 +117,141 @@ const ADMIN_SETTING_KEYS: &[&str] = &[
     "max_live_drawdown_pct",
 ];
 
+fn ai_managed_keys() -> &'static [&'static str] {
+    &[
+        "invert_sides",
+        "risk_per_trade_pct",
+        "max_open_positions",
+        "max_daily_loss_pct",
+        "max_consecutive_losses",
+        "cooldown_seconds",
+        "loss_cooldown_seconds",
+        "cost_safety_multiplier",
+        "max_holding_seconds",
+        "trail_arm_r",
+        "trail_giveback_r",
+        "breakeven_arm_r",
+        "reversal_confirm_ticks",
+        "reversal_confirm_seconds",
+        "reversal_min_hold_seconds",
+        "alternative_wall_multiplier",
+        "alternative_signal_expiry_seconds",
+        "alternative_retest_tolerance_pct",
+        "alternative_retest_hold_ticks",
+        "alternative_min_confluence_score",
+        "alternative_min_net_reward_risk",
+        "alternative_target_r_multiple",
+        "alternative_max_target_pct",
+        "alternative_min_stop_pct",
+        "alternative_max_stop_pct",
+        "alternative_structure_buffer_pct",
+        "fvg_min_net_reward_risk",
+        "fvg_target_r_multiple",
+        "fvg_max_target_pct",
+        "fvg_min_stop_pct",
+        "fvg_max_stop_pct",
+        "fvg_stop_buffer_pct",
+        "fvg_m15_min_gap_atr",
+        "fvg_m15_min_displacement_atr",
+        "fvg_m15_min_body_ratio",
+        "fvg_m15_max_age_bars",
+        "fvg_m1_min_gap_atr",
+        "fvg_m1_min_displacement_atr",
+        "fvg_m1_min_body_ratio",
+        "fvg_m1_confirmation_bars",
+        "fvg_s5_min_gap_pct",
+        "fvg_s5_min_body_ratio",
+        "fvg_s5_inversion_bars",
+        "fvg_s5_retest_bars",
+        "fvg_s5_entry_depth",
+    ]
+}
+
+fn is_ai_managed(key: &str) -> bool {
+    ai_managed_keys().contains(&key)
+}
+
+fn ai_recommended_settings() -> Value {
+    json!({
+        "invert_sides": false,
+        "risk_per_trade_pct": 0.0025,
+        "max_open_positions": 2,
+        "max_daily_loss_pct": 0.015,
+        "max_consecutive_losses": 4,
+        "cooldown_seconds": 180.0,
+        "loss_cooldown_seconds": 900.0,
+        "cost_safety_multiplier": 1.35,
+        "max_holding_seconds": 900.0,
+        "trail_arm_r": 1.0,
+        "trail_giveback_r": 0.55,
+        "breakeven_arm_r": 0.8,
+        "reversal_confirm_ticks": 3,
+        "reversal_confirm_seconds": 3.0,
+        "reversal_min_hold_seconds": 30.0,
+        "alternative_wall_multiplier": 15.0,
+        "alternative_signal_expiry_seconds": 8.0,
+        "alternative_retest_tolerance_pct": 0.0008,
+        "alternative_retest_hold_ticks": 3,
+        "alternative_min_confluence_score": 85,
+        "alternative_min_net_reward_risk": 1.35,
+        "alternative_target_r_multiple": 1.8,
+        "alternative_max_target_pct": 0.0100,
+        "alternative_min_stop_pct": 0.0020,
+        "alternative_max_stop_pct": 0.0075,
+        "alternative_structure_buffer_pct": 0.0008,
+        "fvg_min_net_reward_risk": 1.50,
+        "fvg_target_r_multiple": 2.0,
+        "fvg_max_target_pct": 0.0120,
+        "fvg_min_stop_pct": 0.0015,
+        "fvg_max_stop_pct": 0.0060,
+        "fvg_stop_buffer_pct": 0.0005,
+        "fvg_m15_min_gap_atr": 0.10,
+        "fvg_m15_min_displacement_atr": 1.0,
+        "fvg_m15_min_body_ratio": 0.60,
+        "fvg_m15_max_age_bars": 16,
+        "fvg_m1_min_gap_atr": 0.05,
+        "fvg_m1_min_displacement_atr": 0.8,
+        "fvg_m1_min_body_ratio": 0.60,
+        "fvg_m1_confirmation_bars": 15,
+        "fvg_s5_min_gap_pct": 0.00015,
+        "fvg_s5_min_body_ratio": 0.55,
+        "fvg_s5_inversion_bars": 24,
+        "fvg_s5_retest_bars": 12,
+        "fvg_s5_entry_depth": 0.50
+    })
+}
+
+fn saved_custom_settings() -> Value {
+    let mut values = ai_recommended_settings();
+    let custom_defaults = json!({
+        "fvg_min_net_reward_risk": 1.35,
+        "fvg_target_r_multiple": 1.8,
+        "fvg_max_target_pct": 0.0100,
+        "fvg_min_stop_pct": 0.0020,
+        "fvg_max_stop_pct": 0.0075,
+        "fvg_stop_buffer_pct": 0.0008
+    });
+    for (key, value) in custom_defaults.as_object().unwrap() {
+        values[key] = value.clone();
+    }
+    for key in ai_managed_keys() {
+        let Ok(raw) = env::var(key.to_uppercase()) else {
+            continue;
+        };
+        if values[*key].is_boolean() {
+            values[*key] = json!(matches!(
+                raw.to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ));
+        } else if let Ok(number) = raw.parse::<f64>() {
+            if number.is_finite() {
+                values[*key] = json!(number);
+            }
+        }
+    }
+    values
+}
+
 fn env_file_path() -> String {
     env_str("PULSEBOOK_ENV_FILE", "pulsebook.env")
 }
@@ -152,6 +288,7 @@ pub struct Settings {
     pub demo_fallback: bool,
     pub trading_mode: String,
     pub strategy_mode: String,
+    pub settings_profile: String,
     pub scan_interval: u64,
     pub max_symbols: usize,
     pub min_turnover: f64,
@@ -232,7 +369,7 @@ pub struct Settings {
 
 impl Settings {
     fn new() -> Self {
-        Self {
+        let mut settings = Self {
             rest_url: "https://api.bybit.com".into(),
             ws_url: "wss://stream.bybit.com/v5/public/linear".into(),
             host: env_str("HOST", "0.0.0.0"),
@@ -243,6 +380,7 @@ impl Settings {
             demo_fallback: env_bool("DEMO_FALLBACK", true),
             trading_mode: env_str("TRADING_MODE", "paper").to_lowercase(),
             strategy_mode: env_str("STRATEGY_MODE", "alternative").to_lowercase(),
+            settings_profile: env_str("SETTINGS_PROFILE", "custom").to_lowercase(),
             scan_interval: env_u64("SCAN_INTERVAL", 3600),
             max_symbols: env_u64("MAX_SYMBOLS", 40) as usize,
             min_turnover: env_f64("MIN_TURNOVER", 10_000_000.0),
@@ -314,7 +452,61 @@ impl Settings {
                     "SUIUSDT",
                 ],
             ),
+        };
+        if settings.settings_profile == "ai_recommended" {
+            settings.apply_ai_recommended();
         }
+        settings
+    }
+
+    fn apply_ai_recommended(&mut self) {
+        let values = ai_recommended_settings();
+        let number = |key: &str| values[key].as_f64().expect("AI setting must be numeric");
+        self.invert_sides = false;
+        self.risk_per_trade_pct = number("risk_per_trade_pct");
+        self.max_open_positions = number("max_open_positions") as usize;
+        self.max_daily_loss_pct = number("max_daily_loss_pct");
+        self.max_consecutive_losses = number("max_consecutive_losses") as usize;
+        self.cooldown_seconds = number("cooldown_seconds");
+        self.loss_cooldown_seconds = number("loss_cooldown_seconds");
+        self.cost_safety_multiplier = number("cost_safety_multiplier");
+        self.max_holding_seconds = number("max_holding_seconds");
+        self.trail_arm_r = number("trail_arm_r");
+        self.trail_giveback_r = number("trail_giveback_r");
+        self.breakeven_arm_r = number("breakeven_arm_r");
+        self.reversal_confirm_ticks = number("reversal_confirm_ticks") as u32;
+        self.reversal_confirm_seconds = number("reversal_confirm_seconds");
+        self.reversal_min_hold_seconds = number("reversal_min_hold_seconds");
+        self.alternative_wall_multiplier = number("alternative_wall_multiplier");
+        self.alternative_signal_expiry_seconds = number("alternative_signal_expiry_seconds");
+        self.alternative_retest_tolerance_pct = number("alternative_retest_tolerance_pct");
+        self.alternative_retest_hold_ticks = number("alternative_retest_hold_ticks") as u32;
+        self.alternative_min_confluence_score = number("alternative_min_confluence_score") as i64;
+        self.alternative_min_net_reward_risk = number("alternative_min_net_reward_risk");
+        self.alternative_target_r_multiple = number("alternative_target_r_multiple");
+        self.alternative_max_target_pct = number("alternative_max_target_pct");
+        self.alternative_min_stop_pct = number("alternative_min_stop_pct");
+        self.alternative_max_stop_pct = number("alternative_max_stop_pct");
+        self.alternative_structure_buffer_pct = number("alternative_structure_buffer_pct");
+        self.fvg_min_net_reward_risk = number("fvg_min_net_reward_risk");
+        self.fvg_target_r_multiple = number("fvg_target_r_multiple");
+        self.fvg_max_target_pct = number("fvg_max_target_pct");
+        self.fvg_min_stop_pct = number("fvg_min_stop_pct");
+        self.fvg_max_stop_pct = number("fvg_max_stop_pct");
+        self.fvg_stop_buffer_pct = number("fvg_stop_buffer_pct");
+        self.fvg_m15_min_gap_atr = number("fvg_m15_min_gap_atr");
+        self.fvg_m15_min_displacement_atr = number("fvg_m15_min_displacement_atr");
+        self.fvg_m15_min_body_ratio = number("fvg_m15_min_body_ratio");
+        self.fvg_m15_max_age_bars = number("fvg_m15_max_age_bars") as u32;
+        self.fvg_m1_min_gap_atr = number("fvg_m1_min_gap_atr");
+        self.fvg_m1_min_displacement_atr = number("fvg_m1_min_displacement_atr");
+        self.fvg_m1_min_body_ratio = number("fvg_m1_min_body_ratio");
+        self.fvg_m1_confirmation_bars = number("fvg_m1_confirmation_bars") as u32;
+        self.fvg_s5_min_gap_pct = number("fvg_s5_min_gap_pct");
+        self.fvg_s5_min_body_ratio = number("fvg_s5_min_body_ratio");
+        self.fvg_s5_inversion_bars = number("fvg_s5_inversion_bars") as u32;
+        self.fvg_s5_retest_bars = number("fvg_s5_retest_bars") as u32;
+        self.fvg_s5_entry_depth = number("fvg_s5_entry_depth");
     }
 
     /// Live trading is hard-locked: the binary refuses to start in any
@@ -326,6 +518,10 @@ impl Settings {
         assert!(
             matches!(self.strategy_mode.as_str(), "alternative" | "fvg"),
             "STRATEGY_MODE must be alternative or fvg"
+        );
+        assert!(
+            matches!(self.settings_profile.as_str(), "custom" | "ai_recommended"),
+            "SETTINGS_PROFILE must be custom or ai_recommended"
         );
         assert!(
             self.alternative_target_r_multiple > self.alternative_min_net_reward_risk
@@ -407,6 +603,10 @@ impl Settings {
             "demo_fallback": self.demo_fallback,
             "trading_mode": self.trading_mode,
             "strategy_mode": self.strategy_mode,
+            "settings_profile": self.settings_profile,
+            "_ai_recommended": ai_recommended_settings(),
+            "_ai_managed_keys": ai_managed_keys(),
+            "_custom_settings": saved_custom_settings(),
             "scan_interval": self.scan_interval,
             "max_symbols": self.max_symbols,
             "min_turnover": self.min_turnover,
@@ -483,7 +683,15 @@ impl Settings {
                 return Err(format!("Unsupported setting: {key}"));
             }
         }
-        validate_admin_settings(object)?;
+        let requested_profile = object
+            .get("settings_profile")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.settings_profile);
+        let mut validated = object.clone();
+        if requested_profile == "ai_recommended" {
+            validated.retain(|key, _| !is_ai_managed(key));
+        }
+        validate_admin_settings(&validated)?;
 
         let path = env_file_path();
         let existing = fs::read_to_string(&path).unwrap_or_default();
@@ -492,6 +700,9 @@ impl Settings {
             let Some(value) = object.get(*key) else {
                 continue;
             };
+            if requested_profile == "ai_recommended" && is_ai_managed(key) {
+                continue;
+            }
             let env_key = key.to_uppercase();
             let encoded = env_value(value)?;
             let replacement = format!("{env_key}={encoded}");
@@ -564,6 +775,14 @@ fn validate_admin_settings(values: &serde_json::Map<String, Value>) -> Result<()
                     .unwrap_or(false)
                 {
                     return Err("strategy_mode must be alternative or fvg".to_string());
+                }
+            }
+            "settings_profile" => {
+                if !value
+                    .as_str()
+                    .is_some_and(|profile| matches!(profile, "custom" | "ai_recommended"))
+                {
+                    return Err("settings_profile must be custom or ai_recommended".to_string());
                 }
             }
             "ws_chunk_size"
@@ -660,3 +879,37 @@ pub static SETTINGS: LazyLock<Settings> = LazyLock::new(|| {
     settings.assert_safe_mode();
     settings
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ai_preset_defines_every_managed_setting() {
+        let preset = ai_recommended_settings();
+        for key in ai_managed_keys() {
+            assert_ne!(preset[*key], Value::Null, "missing AI preset for {key}");
+        }
+    }
+
+    #[test]
+    fn ai_preset_keeps_risk_geometry_valid() {
+        let preset = ai_recommended_settings();
+        assert!(
+            preset["fvg_target_r_multiple"].as_f64().unwrap()
+                > preset["fvg_min_net_reward_risk"].as_f64().unwrap()
+        );
+        assert!(
+            preset["fvg_min_stop_pct"].as_f64().unwrap()
+                <= preset["fvg_max_stop_pct"].as_f64().unwrap()
+        );
+        assert!((0.0..=1.0).contains(&preset["fvg_s5_entry_depth"].as_f64().unwrap()));
+    }
+
+    #[test]
+    fn unknown_settings_profile_is_rejected() {
+        let mut values = serde_json::Map::new();
+        values.insert("settings_profile".to_string(), json!("automatic"));
+        assert!(validate_admin_settings(&values).is_err());
+    }
+}

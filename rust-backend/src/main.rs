@@ -97,6 +97,7 @@ async fn settings_status() -> Json<Value> {
     Json(json!({
         "mode": SETTINGS.trading_mode,
         "strategy_mode": SETTINGS.strategy_mode,
+        "settings_profile": SETTINGS.settings_profile,
         "source": state.source,
         "active_symbols": state.books.len(),
     }))
