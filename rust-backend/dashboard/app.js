@@ -4,7 +4,7 @@ const num=(v,d=2)=>Number(v||0).toLocaleString("en-US",{minimumFractionDigits:d,
 const duration=(s)=>{s=Math.max(0,Math.floor(Number(s)||0));return [Math.floor(s/3600),Math.floor(s%3600/60),s%60].map(v=>String(v).padStart(2,"0")).join(":")};const time=(ts)=>ts?new Date(ts*1000).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit",timeZone:"UTC"}):"—";
 function tone(el,v){el.classList.remove("positive","negative");if(Number(v)>0)el.classList.add("positive");if(Number(v)<0)el.classList.add("negative")}
 function render(s){const st=s.stats||{};$("pnl").textContent=money(st.pnl);tone($("pnl"),st.pnl);$("pnl-note").textContent=`Реализовано ${money(st.realized)} · Открыто ${money(st.unrealized)}`;$("win-rate").textContent=`${num(st.win_rate,1)}%`;$("record").textContent=`${st.wins||0} побед / ${st.losses||0} убытков`;$("profit-factor").textContent=st.profit_factor==null?"∞":num(st.profit_factor);$("trades").textContent=`${st.trades||0} закрытых сделок`;$("open-count").textContent=String(st.open||0).padStart(2,"0");$("uptime").textContent=`Работает ${duration(s.uptime)}`;$("session").textContent=s.session?`#${s.session}`:"—";$("mode").textContent=String(s.mode||"PAPER").toUpperCase();$("source-badge").textContent=`ИСТОЧНИК ${String(s.source||"—").toUpperCase()}`;$("last-update").textContent=`ОБНОВЛЕНО ${time(s.timestamp)} UTC`;
-const radar=(Array.isArray(s.radar)?s.radar.slice():[]).sort((a,b)=>String(a.symbol).localeCompare(String(b.symbol)));$("symbols-count").textContent=String(radar.length);$("radar-body").innerHTML=radar.length?radar.slice(0,20).map(r=>{const flow=Number(r.imbalance??r.delta??r.flow??0);const signal=r.signal||r.status||"MONITOR";return `<tr><td class="symbol">${esc(r.symbol)}</td><td>${price(r.price??r.mid)}</td><td>${num(r.spread_pct??r.spread,3)}%</td><td class="${flow>0?"positive":flow<0?"negative":""}">${flow>0?"+":""}${num(flow,2)}</td><td><span class="signal">${esc(signal)}</span></td></tr>`}).join(""):'<tr><td colspan="5" class="empty">Инструменты ещё не получены. Идёт инициализация сканера.</td></tr>';
+const radar=(Array.isArray(s.radar)?s.radar.slice():[]).sort((a,b)=>String(a.symbol).localeCompare(String(b.symbol)));$("symbols-count").textContent=String(radar.length);$("radar-body").innerHTML=radar.length?radar.slice(0,20).map(r=>{const flow=Number(r.imbalance??r.delta??r.flow??0);const signal=r.signal||r.status||"MONITOR";return `<tr><td class="symbol">${esc(r.symbol)}</td><td>${price(r.price??r.mid)}</td><td>${num(r.spread_pct??r.spread,3)}%</td><td class="${flow>0?"positive":flow<0?"negative":""}">${flow>0?"+":""}${num(flow,2)}</td><td><span class="signal">${esc(signal)}</span></td></tr>`}).join(""):'<tr><td colspan="5" class="empty">Инструменты ещё не получены. Идёт инициализация сканера.</td></tr>';syncHeatmapCoins(radar);
 const positions=Array.isArray(s.positions)?s.positions:[];$("position-count").textContent=String(positions.length).padStart(2,"0");$("positions").innerHTML=positions.length?positions.map(p=>`<article class="position"><div><span>ИНСТРУМЕНТ</span><b class="symbol">${esc(p.symbol)} · <i class="side ${p.side==="LONG"?"positive":"negative"}">${esc(p.side)}</i></b></div><div><span>ВХОД</span><b>${price(p.entry)}</b></div><div><span>ТЕКУЩАЯ</span><b>${price(p.mark)}</b></div><div><span>СТОП / ЦЕЛЬ</span><b>${price(p.stop_price)} / ${price(p.target_price)}</b></div><div><span>НЕРЕАЛИЗ. P&L</span><b class="${Number(p.unrealized)>=0?"positive":"negative"}">${money(p.unrealized)}</b></div></article>`).join(""):'<div class="empty-block">Открытых позиций нет. Движок ищет подходящие сетапы.</div>';
 const logs=Array.isArray(s.logs)?s.logs:[];$("event-count").textContent=String(logs.length).padStart(2,"0");$("logs").innerHTML=logs.length?logs.slice(0,30).map(l=>`<article class="event ${esc(String(l.level||"").toLowerCase())}"><div class="event-head"><span>${esc(l.symbol||"SYSTEM")}</span><time>${time(l.timestamp)} UTC</time></div><p>${esc(l.message)}</p></article>`).join(""):'<div class="empty-block">Событий пока нет. Здесь появится телеметрия движка.</div>';
 const trades=Array.isArray(s.closed_trades)?s.closed_trades:[];$("trades-body").innerHTML=trades.length?trades.slice(0,20).map(t=>`<tr><td>${time(t.closed_at)} UTC</td><td class="symbol">${esc(t.symbol)}</td><td class="side ${t.side==="LONG"?"positive":"negative"}">${esc(t.side)}</td><td>${price(t.entry)} → ${price(t.exit)}</td><td class="${Number(t.pnl)>=0?"positive":"negative"}">${money(t.pnl)}</td><td>${esc(t.reason)}</td></tr>`).join(""):'<tr><td colspan="6" class="empty">В этой сессии нет закрытых сделок.</td></tr>';
@@ -42,3 +42,91 @@ function collectSettings(){return structuredClone(settingsDraft)}
 $("diagnostics-export").onclick=async()=>{if(!adminPassword)adminPassword=prompt("Пароль администратора для экспорта диагностики")||"";if(!adminPassword)return;const button=$("diagnostics-export"),label=button.textContent;button.disabled=true;button.textContent="Подготовка…";try{const response=await fetch("/api/admin/diagnostics/export",{headers:{"x-admin-password":adminPassword}});if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(error.error||`HTTP ${response.status}`)}const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download=`pulsebook-diagnostics-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url)}catch(error){alert(error.message)}finally{button.disabled=false;button.textContent=label}};
 $("settings-open").onclick=()=>$("settings-dialog").showModal();$("settings-menu").onclick=()=>$("settings-dialog").classList.toggle("sidebar-collapsed");$("settings-search").oninput=e=>{settingsSearch=e.target.value.trim().toLowerCase();if(settingsDraft)renderSettingsSection()};$("settings-login").onclick=loginSettings;$("admin-password").onkeydown=e=>{if(e.key==="Enter"&&!e.isComposing&&e.keyCode!==229)loginSettings()};$("settings-reset").onclick=()=>{settingsDraft=loadedSettings.settings_profile==="ai_recommended"?structuredClone(loadedSettings):structuredClone(customDraft);renderSettingsSection();$("settings-message").textContent="Изменения сброшены"};$("settings-form").onsubmit=async e=>{e.preventDefault();$("settings-message").textContent="Сохранение...";try{const result=await api("/api/admin/settings",{method:"PUT",body:JSON.stringify(collectSettings())});if(settingsDraft.settings_profile==="custom")customDraft=structuredClone(settingsDraft);loadedSettings=structuredClone(settingsDraft);$("settings-message").textContent=result.message;$("settings-restart").hidden=false}catch(error){$("settings-message").textContent=error.message}};$("settings-restart").onclick=async()=>{if(!confirm("Перезапустить движок сейчас? Соединение прервётся на несколько секунд."))return;$("settings-restart").disabled=true;try{await api("/api/admin/restart",{method:"POST",body:"{}"});$("settings-message").textContent="Перезапуск...";setTimeout(()=>location.reload(),4000)}catch(error){$("settings-message").textContent=error.message;$("settings-restart").disabled=false}};
 async function loadTelegramStatus(){if(!adminPassword)return;try{const status=await api("/api/admin/telegram/status");const text=$("telegram-status-text");text.textContent=status.enabled?"Telegram: включены":"Telegram: отключены";text.style.color=status.enabled?"var(--accent)":"var(--muted)"}catch{}}$("telegram-toggle").onclick=async()=>{if(!adminPassword)return;const button=$("telegram-toggle");button.disabled=true;try{const current=await api("/api/admin/telegram/status");const result=await api("/api/admin/telegram/toggle",{method:"POST",body:JSON.stringify({enabled:!current.enabled})});$("settings-message").textContent=result.message;await loadTelegramStatus()}catch(error){$("settings-message").textContent=error.message}finally{button.disabled=false}};
+
+let heatmapMode=false,heatmapSymbol="",heatmapRange="3d",heatmapRadar=[],heatmapData=null,heatmapRequest=0;
+const compactMoney=(value)=>`$${Intl.NumberFormat("en-US",{notation:"compact",maximumFractionDigits:1}).format(Number(value)||0)}`;
+
+function syncHeatmapCoins(radar){
+  heatmapRadar=radar;
+  $("heatmap-coin-count").textContent=String(radar.length).padStart(2,"0");
+  $("heatmap-coins").innerHTML=radar.length?radar.map(item=>{const symbol=String(item.symbol||"");return `<button type="button" class="coin-row ${symbol===heatmapSymbol?"active":""}" data-symbol="${esc(symbol)}"><span><b>${esc(symbol.replace(/USDT$/,""))}</b><small>/ USDT</small></span><strong>${price(item.price??item.mid)}</strong></button>`}).join(""):'<div class="empty-block">Активная группа пока пуста.</div>';
+  $("heatmap-coins").querySelectorAll("button").forEach(button=>button.onclick=()=>selectHeatmapSymbol(button.dataset.symbol));
+}
+
+function setDashboardMode(mode){
+  heatmapMode=mode==="heatmap";
+  document.querySelectorAll(".mode-switch button").forEach(button=>button.classList.toggle("active",button.dataset.mode===mode));
+  document.querySelectorAll(".overview-section").forEach(section=>section.hidden=heatmapMode);
+  $("heatmap-view").hidden=!heatmapMode;
+  if(heatmapMode&&!heatmapSymbol&&heatmapRadar.length)selectHeatmapSymbol(heatmapRadar[0].symbol);
+  else if(heatmapMode&&heatmapData)requestAnimationFrame(drawHeatmap);
+}
+
+function selectHeatmapSymbol(symbol){
+  if(!symbol)return;
+  heatmapSymbol=symbol;
+  syncHeatmapCoins(heatmapRadar);
+  $("heatmap-symbol").textContent=symbol;
+  loadHeatmap();
+}
+
+async function loadHeatmap(){
+  if(!heatmapSymbol)return;
+  const request=++heatmapRequest;
+  $("heatmap-status").textContent="ЗАГРУЗКА";
+  $("heatmap-message").hidden=false;
+  $("heatmap-message").textContent="Получение уровней ликвидаций Coinglass...";
+  $("heatmap-canvas-wrap").hidden=true;
+  try{
+    const response=await fetch(`/api/coinglass/liquidation-heatmap?symbol=${encodeURIComponent(heatmapSymbol)}&range=${encodeURIComponent(heatmapRange)}`,{cache:"no-store"});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);
+    if(request!==heatmapRequest)return;
+    heatmapData=data;
+    $("heatmap-message").hidden=true;
+    $("heatmap-canvas-wrap").hidden=false;
+    $("heatmap-status").textContent=`COINGLASS · ${String(data.range).toUpperCase()}`;
+    renderLargestLiquidations(data.largest_liquidations);
+    requestAnimationFrame(drawHeatmap);
+  }catch(error){
+    if(request!==heatmapRequest)return;
+    heatmapData=null;
+    $("heatmap-status").textContent="НЕТ ДАННЫХ";
+    $("heatmap-message").hidden=false;
+    $("heatmap-message").textContent=error.message;
+    $("largest-liquidations").innerHTML='<div class="empty-block">Кластеры недоступны.</div>';
+  }
+}
+
+function renderLargestLiquidations(rows){
+  rows=Array.isArray(rows)?rows:[];
+  $("largest-liquidations").innerHTML=rows.length?rows.map((row,index)=>`<div class="liquidation-row"><span class="cluster-rank">${String(index+1).padStart(2,"0")}</span><span><b>${price(row.price)}</b><small class="${row.side==="LONG"?"negative":"positive"}">${row.side==="LONG"?"LONG LIQUIDATIONS":"SHORT LIQUIDATIONS"}</small></span><strong>${compactMoney(row.amount)}</strong></div>`).join(""):'<div class="empty-block">Крупные кластеры не найдены.</div>';
+}
+
+function drawHeatmap(){
+  if(!heatmapData||$("heatmap-canvas-wrap").hidden)return;
+  const canvas=$("heatmap-canvas"),wrap=$("heatmap-canvas-wrap"),width=Math.max(320,wrap.clientWidth),height=Math.max(420,Math.min(620,width*.56)),dpr=Math.min(window.devicePixelRatio||1,2);
+  canvas.width=Math.floor(width*dpr);canvas.height=Math.floor(height*dpr);canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;
+  const ctx=canvas.getContext("2d");ctx.scale(dpr,dpr);
+  const margin={top:24,right:74,bottom:38,left:14},plotW=width-margin.left-margin.right,plotH=height-margin.top-margin.bottom;
+  const candles=Array.isArray(heatmapData.price_candlesticks)?heatmapData.price_candlesticks:[],levels=(Array.isArray(heatmapData.y_axis)?heatmapData.y_axis:[]).map(Number),points=Array.isArray(heatmapData.liquidation_leverage_data)?heatmapData.liquidation_leverage_data:[];
+  if(!candles.length||!levels.length)return;
+  const lows=candles.map(row=>Number(row[3])),highs=candles.map(row=>Number(row[2])),minPrice=Math.min(...levels,...lows),maxPrice=Math.max(...levels,...highs),priceSpan=Math.max(maxPrice-minPrice,1e-9),xAt=index=>margin.left+(index/Math.max(candles.length-1,1))*plotW,yAt=value=>margin.top+(maxPrice-Number(value))/priceSpan*plotH;
+  ctx.fillStyle="#090b0d";ctx.fillRect(0,0,width,height);
+  ctx.strokeStyle="#20262b";ctx.lineWidth=1;ctx.fillStyle="#707981";ctx.font="10px ui-monospace, monospace";ctx.textAlign="left";
+  for(let i=0;i<=5;i++){const y=margin.top+plotH*i/5,value=maxPrice-priceSpan*i/5;ctx.beginPath();ctx.moveTo(margin.left,y);ctx.lineTo(margin.left+plotW,y);ctx.stroke();ctx.fillText(price(value),margin.left+plotW+8,y+3)}
+  const maxAmount=Math.max(1,...points.map(point=>Number(point[2])||0)),cellW=Math.max(1.2,plotW/Math.max(candles.length,1)*1.25),cellH=Math.max(2,plotH/Math.max(levels.length,1)*1.6);
+  for(const point of points){const x=Number(point[0]),yIndex=Number(point[1]),amount=Number(point[2]);if(!Number.isFinite(x)||!Number.isFinite(yIndex)||!Number.isFinite(amount)||!levels[yIndex])continue;const intensity=Math.log1p(amount)/Math.log1p(maxAmount),hue=205-intensity*165;ctx.fillStyle=`hsla(${hue},92%,${42+intensity*18}%,${.1+intensity*.72})`;ctx.fillRect(xAt(x)-cellW/2,yAt(levels[yIndex])-cellH/2,cellW,cellH)}
+  const candleW=Math.max(1,Math.min(6,plotW/Math.max(candles.length,1)*.58));
+  candles.forEach((row,index)=>{const open=Number(row[1]),high=Number(row[2]),low=Number(row[3]),close=Number(row[4]),x=xAt(index),up=close>=open;ctx.strokeStyle=up?"#73d7a2":"#f0786f";ctx.fillStyle=up?"#73d7a2":"#f0786f";ctx.globalAlpha=.86;ctx.beginPath();ctx.moveTo(x,yAt(high));ctx.lineTo(x,yAt(low));ctx.stroke();ctx.fillRect(x-candleW/2,Math.min(yAt(open),yAt(close)),candleW,Math.max(1,Math.abs(yAt(open)-yAt(close))));ctx.globalAlpha=1});
+  const largest=Array.isArray(heatmapData.largest_liquidations)?heatmapData.largest_liquidations.slice(0,5):[];
+  ctx.setLineDash([4,4]);ctx.font="700 10px ui-monospace, monospace";
+  largest.forEach((row,index)=>{const y=yAt(row.price);ctx.strokeStyle=index===0?"#fff1a8":"rgba(255,220,100,.62)";ctx.beginPath();ctx.moveTo(margin.left,y);ctx.lineTo(margin.left+plotW,y);ctx.stroke();ctx.fillStyle=index===0?"#fff1a8":"#d8c476";ctx.textAlign="right";ctx.fillText(`${index+1} · ${compactMoney(row.amount)}`,margin.left+plotW-6,y-5)});ctx.setLineDash([]);
+  const last=candles[candles.length-1],lastPrice=Number(last[4]),lastY=yAt(lastPrice);ctx.fillStyle="#f2f1ec";ctx.fillRect(margin.left+plotW,lastY-8,70,16);ctx.fillStyle="#0b0d0f";ctx.textAlign="left";ctx.fillText(price(lastPrice),margin.left+plotW+5,lastY+3);
+  ctx.fillStyle="#707981";ctx.textAlign="center";for(let i=0;i<4;i++){const index=Math.round((candles.length-1)*i/3),date=new Date(Number(candles[index][0])*1000);ctx.fillText(date.toLocaleDateString("ru-RU",{day:"2-digit",month:"short",timeZone:"UTC"}),xAt(index),height-13)}
+}
+
+document.querySelectorAll(".mode-switch button").forEach(button=>button.onclick=()=>setDashboardMode(button.dataset.mode));
+$("heatmap-ranges").querySelectorAll("button").forEach(button=>button.onclick=()=>{heatmapRange=button.dataset.range;$("heatmap-ranges").querySelectorAll("button").forEach(item=>item.classList.toggle("active",item===button));if(heatmapSymbol)loadHeatmap()});
+window.addEventListener("resize",()=>{if(heatmapMode&&heatmapData)requestAnimationFrame(drawHeatmap)});
+setInterval(()=>{if(heatmapMode&&heatmapSymbol)loadHeatmap()},60000);

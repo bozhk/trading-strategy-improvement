@@ -12,25 +12,33 @@
   <a class="skip" href="#main">Перейти к панели</a>
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">PB</span><div><strong>PulseBook</strong><span>Движок анализа потока ордеров</span></div></div>
-    <div class="topbar-actions"><div class="system-state"><span id="status-dot" class="status-dot" aria-hidden="true"></span><span id="connection-label">Подключение</span><span class="divider" aria-hidden="true"></span><span id="clock">--:--:-- UTC</span></div><button id="settings-open" class="settings-button" type="button">Настройки</button></div>
+    <div class="topbar-actions"><nav class="mode-switch" aria-label="Режим панели"><button class="active" type="button" data-mode="overview">Обзор</button><button type="button" data-mode="heatmap">Heatmap</button></nav><div class="system-state"><span id="status-dot" class="status-dot" aria-hidden="true"></span><span id="connection-label">Подключение</span><span class="divider" aria-hidden="true"></span><span id="clock">--:--:-- UTC</span></div><button id="settings-open" class="settings-button" type="button">Настройки</button></div>
   </header>
 
   <main id="main" class="shell">
-    <section class="intro" aria-labelledby="page-title">
+    <section id="heatmap-view" class="heatmap-view" aria-labelledby="heatmap-title" hidden>
+      <header class="heatmap-header"><div><p class="eyebrow">COINGLASS / LIQUIDATION LEVELS</p><h1 id="heatmap-title">Карта ликвидаций</h1><p>Свечи Binance и расчётные кластеры принудительных ликвидаций Coinglass.</p></div><div id="heatmap-ranges" class="range-switch" aria-label="Диапазон heatmap"><button type="button" data-range="12h">12ч</button><button type="button" data-range="24h">24ч</button><button class="active" type="button" data-range="3d">3д</button><button type="button" data-range="7d">7д</button><button type="button" data-range="30d">30д</button></div></header>
+      <div class="heatmap-layout">
+        <aside class="panel coin-picker"><div class="panel-head"><div><p class="eyebrow">АКТИВНАЯ ГРУППА</p><h2>Монеты</h2></div><span id="heatmap-coin-count" class="counter">00</span></div><div id="heatmap-coins" class="coin-list"><div class="empty-block">Ожидание рыночных данных...</div></div></aside>
+        <section class="panel heatmap-chart-panel"><div class="panel-head"><div><p class="eyebrow">LIQUIDATION HEATMAP</p><h2 id="heatmap-symbol">Выберите монету</h2></div><span id="heatmap-status" class="badge">COINGLASS</span></div><div id="heatmap-message" class="heatmap-message">Выберите монету слева, чтобы открыть график.</div><div id="heatmap-canvas-wrap" class="heatmap-canvas-wrap" hidden><canvas id="heatmap-canvas" aria-label="График цены и крупнейших ликвидаций"></canvas><div class="heatmap-legend"><span>НИЗКАЯ ПЛОТНОСТЬ</span><i></i><span>ВЫСОКАЯ ПЛОТНОСТЬ</span></div></div><div class="liquidation-table"><div class="liquidation-table-head"><span>КРУПНЕЙШИЕ ЛИКВИДАЦИИ</span><span>ОЦЕНОЧНЫЙ ОБЪЁМ</span></div><div id="largest-liquidations"><div class="empty-block">Нет данных.</div></div></div></section>
+      </div>
+    </section>
+
+    <section class="intro overview-section" aria-labelledby="page-title">
       <div><p class="eyebrow">СИСТЕМА / ТЕЛЕМЕТРИЯ</p><h1 id="page-title">Рынок под контролем.<br><span>Только значимые сигналы.</span></h1></div>
       <div class="intro-meta"><p>Отслеживание поглощения, пробоя и ретеста по активной группе инструментов. Реальная торговля жёстко заблокирована.</p><div class="meta-row"><span>ДВИЖОК <b>RUST</b></span><span>РЕЖИМ <b id="mode">PAPER</b></span><span>СЕССИЯ <b id="session">—</b></span><span>МОНЕТ <b id="symbols-count">—</b></span></div></div>
     </section>
 
-    <section class="metrics" aria-label="Сводка результатов">
+    <section class="metrics overview-section" aria-label="Сводка результатов">
       <article><span>Общий P&amp;L</span><strong id="pnl">$0.00</strong><small id="pnl-note">Реализовано $0.00</small></article>
       <article><span>Доля побед</span><strong id="win-rate">0.0%</strong><small id="record">0 побед / 0 убытков</small></article>
       <article><span>Профит-фактор</span><strong id="profit-factor">0.00</strong><small id="trades">0 закрытых сделок</small></article>
       <article><span>Открытые позиции</span><strong id="open-count">0</strong><small id="uptime">Работает 00:00:00</small></article>
     </section>
 
-    <div id="error-banner" class="error-banner" role="alert" hidden>Телеметрия недоступна. Повторное подключение выполняется автоматически.</div>
+    <div id="error-banner" class="error-banner overview-section" role="alert" hidden>Телеметрия недоступна. Повторное подключение выполняется автоматически.</div>
 
-    <section class="workspace">
+    <section class="workspace overview-section">
       <div class="primary-column">
         <section class="panel radar-panel" aria-labelledby="radar-title">
           <div class="panel-head"><div><p class="eyebrow">АКТИВНАЯ ГРУППА</p><h2 id="radar-title">Рыночный радар</h2></div><span id="source-badge" class="badge">ИСТОЧНИК —</span></div>
@@ -49,7 +57,7 @@
       </aside>
     </section>
 
-    <section class="panel diagnostics-panel" aria-labelledby="diagnostics-title">
+    <section class="panel diagnostics-panel overview-section" aria-labelledby="diagnostics-title">
       <div class="panel-head"><div><p class="eyebrow">ДИАГНОСТИКА / 60 МИНУТ</p><h2 id="diagnostics-title">Воронка сигналов</h2></div><div class="diagnostics-actions"><span id="diagnostics-events" class="counter">00 СОБЫТИЙ</span><button id="diagnostics-export" class="secondary-button" type="button">Скачать JSON</button></div></div>
       <div id="diagnostics-empty" class="empty-block">Статистика накопится после запуска обновлённого движка.</div>
       <div id="diagnostics-content" class="diagnostics-content" hidden>
@@ -64,7 +72,7 @@
       </div>
     </section>
 
-    <section class="panel trades-panel" aria-labelledby="trades-title">
+    <section class="panel trades-panel overview-section" aria-labelledby="trades-title">
       <div class="panel-head"><div><p class="eyebrow">ИСТОРИЯ</p><h2 id="trades-title">Последние закрытые сделки</h2></div><span id="last-update">Нет синхронизации</span></div>
       <div class="table-wrap"><table><thead><tr><th>Закрыто</th><th>Инструмент</th><th>Сторона</th><th>Вход → Выход</th><th>Результат</th><th>Причина</th></tr></thead><tbody id="trades-body"><tr><td colspan="6" class="empty">В этой сессии нет закрытых сделок.</td></tr></tbody></table></div>
     </section>

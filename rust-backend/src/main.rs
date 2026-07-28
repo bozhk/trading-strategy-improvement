@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 mod brain;
+mod coinglass;
 mod config;
 mod detail;
 mod execution;
@@ -310,6 +311,10 @@ async fn main() {
         .route("/static/app.js", get(dashboard_js))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
+        .route(
+            "/api/coinglass/liquidation-heatmap",
+            get(coinglass::liquidation_heatmap),
+        )
         .route("/api/settings/status", get(settings_status))
         .route(
             "/api/admin/settings",

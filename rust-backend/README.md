@@ -104,6 +104,7 @@ TELEGRAM_NOTIFY_REJECTIONS=true
 TELEGRAM_REJECT_SUMMARY_SECONDS=300    # одна сводка отказов каждые 5 минут
 TELEGRAM_NOTIFY_STARTUP=true
 ADMIN_PASSWORD=replace-with-dashboard-password
+COINGLASS_API_KEY=replace-with-coinglass-api-key # Professional+ для liquidation heatmap
 REVERSAL_CONFIRM_TICKS=3
 REVERSAL_CONFIRM_SECONDS=3
 REVERSAL_MIN_HOLD_SECONDS=30
