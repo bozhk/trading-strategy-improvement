@@ -77,28 +77,94 @@ cargo run
 
 # Продакшен-сборка (медленная сборка, быстрый код) — всегда для реальной работы
 cargo build --release
-./target/release/pulsebook-engine
+./target/release/pulsebook
 
 # Тесты
 cargo test
 ```
 
-Откройте `http://localhost:8000` — dashboard тот же, что у Python-версии
-(шаблон и статика берутся из `../backend/templates` и `../backend/static`).
+Откройте `http://localhost:8000`. Dashboard из `dashboard/` встраивается в
+бинарник при сборке, поэтому для запуска не нужны отдельные HTML/CSS/JS-файлы.
 
 ### Переменные окружения
 
 ```bash
 PORT=8000                 # порт HTTP-сервера
 DATA_MODE=demo            # demo (синтетика) | real (публичные стримы Bybit)
+INVERT_SIDES=false       # контрфактический paper-тест противоположного направления
 ACCOUNT_EQUITY=10000      # виртуальный капитал
-RISK_PER_TRADE_PCT=0.005  # риск на сделку (0.5%)
-TEMPLATES_DIR=../backend/templates
-STATIC_DIR=../backend/static
+RISK_PER_TRADE_PCT=0.0025 # риск на сделку (0.25%)
+
+# Telegram (необязательно)
+TELEGRAM_BOT_TOKEN=123456:replace-with-token
+TELEGRAM_CHAT_ID=-1001234567890
+TELEGRAM_MENTION=@ananasec              # кого упоминать в уведомлениях
+TELEGRAM_THREAD_ID=123                 # только для topic в forum-группе
+TELEGRAM_NOTIFY_REJECTIONS=true
+TELEGRAM_REJECT_SUMMARY_SECONDS=300    # одна сводка отказов каждые 5 минут
+TELEGRAM_NOTIFY_STARTUP=true
+ADMIN_PASSWORD=replace-with-dashboard-password
+COINGLASS_API_KEY=replace-with-coinglass-api-key # Professional+ для liquidation heatmap
+REVERSAL_CONFIRM_TICKS=3
+REVERSAL_CONFIRM_SECONDS=3
+REVERSAL_MIN_HOLD_SECONDS=30
 
 # Пример: реальные данные Bybit на порту 9000
-DATA_MODE=real PORT=9000 ./target/release/pulsebook-engine
+DATA_MODE=real PORT=9000 ./target/release/pulsebook
 ```
+
+### Telegram-уведомления
+
+1. Создайте бота через `@BotFather` и сохраните выданный token.
+2. Добавьте бота в группу. Для отправки сообщений достаточно права писать в группу.
+3. Отправьте любое сообщение в группу после добавления бота.
+4. Откройте в браузере
+   `https://api.telegram.org/bot<ВАШ_TOKEN>/getUpdates` и найдите
+   `message.chat.id`. ID группы обычно отрицательный, например
+   `-1001234567890`.
+5. Если группа использует topics, возьмите `message.message_thread_id` и
+   укажите его в `TELEGRAM_THREAD_ID`. Для обычной группы переменная не нужна.
+
+Token является секретом: не добавляйте его в Git, README, скриншоты или логи.
+На сервере передайте значения через environment PM2/systemd. После изменения
+environment перезапустите процесс с `--update-env`.
+
+`ADMIN_PASSWORD` обязателен для раздела настроек dashboard. Если он не задан,
+вход вернёт ошибку `ADMIN_PASSWORD is not configured`. Пароль передаётся в
+заголовке `x-admin-password`; используйте HTTPS перед публичным сервером.
+
+Бот отправляет открытия и закрытия сразу. Отклонения агрегируются по символу и
+причине, затем отправляются одной сводкой. Это защищает группу и Telegram API от
+тысяч одинаковых сообщений. Ошибки Telegram не блокируют торговый цикл.
+Каждое уведомление начинается с `@ananasec`, чтобы Telegram отправлял push-уведомление.
+
+`INVERT_SIDES=true` включает отдельный контрфактический paper-тест: условия
+сигнала сохраняются, но фактическая сторона сделки меняется на противоположную.
+Такие открытия помечаются в Telegram как `INVERTED TEST`. По умолчанию режим
+выключен и live-торговлю не включает.
+
+Пример настройки для PM2 на сервере. Файл должен быть доступен только root:
+
+```bash
+sudo install -m 600 /dev/null /opt/pulsebook/pulsebook.env
+sudo sh -c 'printf "%s\n" \
+  "TELEGRAM_BOT_TOKEN=123456:replace-with-token" \
+  "TELEGRAM_CHAT_ID=-1001234567890" \
+  "TELEGRAM_MENTION=@ananasec" \
+  "ADMIN_PASSWORD=replace-with-dashboard-password" \
+  "TELEGRAM_REJECT_SUMMARY_SECONDS=300" \
+  > /opt/pulsebook/pulsebook.env'
+
+set -a
+. /opt/pulsebook/pulsebook.env
+set +a
+pm2 restart pulsebook-backend --update-env
+```
+
+Если приложение запускается через ecosystem-файл PM2, добавьте эти значения в
+секцию `env` этого файла и выполните `pm2 restart <имя> --update-env`. Не
+передавайте token аргументом командной строки: он может попасть в историю shell
+или список процессов.
 
 `TRADING_MODE=live` намеренно вызывает мгновенный отказ запуска —
 live-исполнение отсутствует в бинарнике и заблокировано до прохождения
@@ -110,7 +176,7 @@ expectancy, просадка ≤ 10%) и отдельной ревизии ко�
 ```bash
 # Собрать на сервере (или скопировать готовый бинарник под ту же архитектуру)
 cargo build --release
-sudo cp target/release/pulsebook-engine /usr/local/bin/
+sudo cp target/release/pulsebook /usr/local/bin/
 
 sudo tee /etc/systemd/system/pulsebook.service > /dev/null <<'EOF'
 [Unit]
@@ -118,12 +184,11 @@ Description=PulseBook order-flow engine
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/pulsebook-engine
+ExecStart=/usr/local/bin/pulsebook
 WorkingDirectory=/opt/pulsebook
 Environment=DATA_MODE=real
 Environment=PORT=8000
-Environment=TEMPLATES_DIR=/opt/pulsebook/templates
-Environment=STATIC_DIR=/opt/pulsebook/static
+EnvironmentFile=-/opt/pulsebook/pulsebook.env
 Restart=on-failure
 RestartSec=5
 
@@ -132,7 +197,6 @@ WantedBy=multi-user.target
 EOF
 
 sudo mkdir -p /opt/pulsebook
-sudo cp -r ../backend/templates ../backend/static /opt/pulsebook/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pulsebook
 sudo systemctl status pulsebook
@@ -152,6 +216,7 @@ rust-backend/
     ├── readiness.rs    # статистический gate для live-режима
     ├── state.rs        # общее состояние + snapshot для dashboard
     ├── stream.rs       # Bybit WebSocket (real) и синтетика (demo)
+    ├── telegram.rs     # неблокирующие Telegram-уведомления и сводка отказов
     ├── scanner.rs      # отбор ликвидных перпетуалов по обороту
     ├── replay.rs       # детерминированный replay JSONL без look-ahead
     └── detail.rs       # payload деталей символа для модалки

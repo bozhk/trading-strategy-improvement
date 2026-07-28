@@ -1,7 +1,9 @@
 use crate::models::{
     now_ts, ClosedTrade, LogEvent, OrderBook, PendingSignal, Position, TradeTick, WallTrack,
 };
+use crate::mtf_fvg::{MtfBars, MtfFvgTracker};
 use crate::readiness::live_readiness;
+use crate::telegram;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -16,6 +18,8 @@ pub const BTC_HISTORY_MAXLEN: usize = 400;
 pub struct MarketState {
     pub books: HashMap<String, OrderBook>,
     pub trades: HashMap<String, VecDeque<TradeTick>>,
+    pub mtf_bars: HashMap<String, MtfBars>,
+    pub mtf_fvg: HashMap<String, MtfFvgTracker>,
     pub positions: HashMap<String, Position>,
     pub closed: VecDeque<ClosedTrade>,
     pub logs: VecDeque<LogEvent>,
@@ -46,6 +50,10 @@ impl MarketState {
     }
 
     pub fn push_tick(&mut self, symbol: &str, tick: TradeTick) {
+        self.mtf_bars
+            .entry(symbol.to_string())
+            .or_default()
+            .update(&tick);
         let queue = self.trades.entry(symbol.to_string()).or_default();
         if queue.len() >= TRADES_MAXLEN {
             queue.pop_front();
@@ -81,6 +89,7 @@ impl MarketState {
     pub fn reject(&mut self, symbol: &str, reason: &str) {
         *self.reject_counts.entry(reason.to_string()).or_insert(0) += 1;
         self.log("SKIP", &format!("ENTRY REJECTED · {reason}"), symbol, 5.0);
+        telegram::notify_rejection(symbol, reason);
     }
 
     pub fn snapshot(&self) -> Value {
@@ -146,7 +155,7 @@ impl MarketState {
             *exit_reasons.entry(trade.reason.as_str()).or_insert(0) += 1;
         }
         let mut exit_reasons: Vec<(&str, u64)> = exit_reasons.into_iter().collect();
-        exit_reasons.sort_by(|a, b| b.1.cmp(&a.1));
+        exit_reasons.sort_by_key(|item| std::cmp::Reverse(item.1));
 
         json!({
             "version": 3,
@@ -190,6 +199,10 @@ impl MarketState {
                 "exit_snapshot": t.exit_snapshot,
             })).collect::<Vec<_>>(),
             "radar": self.metrics.values().collect::<Vec<_>>(),
+            "mtf_fvg": self.mtf_fvg.iter().map(|(symbol, tracker)| json!({
+                "symbol": symbol,
+                "state": tracker.snapshot(),
+            })).collect::<Vec<_>>(),
             "positions": self.positions.values().map(|p| json!({
                 "symbol": p.symbol, "side": p.side.as_str(), "entry": p.entry,
                 "quantity": p.quantity, "opened_at": p.opened_at, "mark": p.mark,

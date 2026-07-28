@@ -1,0 +1,87 @@
+name: Build and Deploy Rust to Vultr
+
+# Сценарий будет запускаться автоматически при каждом push в ветку ai-feature
+on:
+  push:
+    branches: [ ai-feature ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Скачиваем актуальный код из репозитория на сервера GitHub
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 2. Устанавливаем Rust на сервере GitHub
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    # 3. Кэшируем зависимости Cargo, чтобы сборка с каждым разом шла быстрее
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "rust-backend -> target"
+
+    # 4. Собираем бинарник под Linux
+    - name: Build Release Binary
+      run: |
+        cd rust-backend
+        cargo build --release
+
+    # 5. Останавливаем PM2 перед копированием, чтобы разблокировать файл на сервере
+    - name: Stop PM2 on Vultr
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: root
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          pm2 stop pulsebook-backend || true
+
+    # 6. Перекидываем готовый скомпилированный файл на твой сервер Vultr
+    - name: Deploy to Vultr via SCP
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: root
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        source: "rust-backend/target/release/pulsebook"
+        target: "/root/trading-strategy-improvement/"
+
+    # 7. Запускаем PM2 обратно с новыми изменениями
+    - name: Start PM2 on Vultr
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: root
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,TELEGRAM_THREAD_ID,ADMIN_PASSWORD
+        script: |
+          test -n "$TELEGRAM_BOT_TOKEN" || { echo "Missing TELEGRAM_BOT_TOKEN GitHub Secret"; exit 1; }
+          test -n "$TELEGRAM_CHAT_ID" || { echo "Missing TELEGRAM_CHAT_ID GitHub Secret"; exit 1; }
+          test -n "$ADMIN_PASSWORD" || { echo "Missing ADMIN_PASSWORD GitHub Secret"; exit 1; }
+
+          umask 077
+          printf '%s\n' \
+            "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" \
+            "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID" \
+            "TELEGRAM_MENTION=@ananasec" \
+            "TELEGRAM_THREAD_ID=$TELEGRAM_THREAD_ID" \
+            "ADMIN_PASSWORD=$ADMIN_PASSWORD" \
+            "TELEGRAM_NOTIFY_REJECTIONS=true" \
+            "TELEGRAM_REJECT_SUMMARY_SECONDS=300" \
+            "TELEGRAM_NOTIFY_STARTUP=true" \
+            > /root/trading-strategy-improvement/pulsebook.env
+          chmod 600 /root/trading-strategy-improvement/pulsebook.env
+
+          set -a
+          . /root/trading-strategy-improvement/pulsebook.env
+          set +a
+          pm2 start pulsebook-backend --update-env || pm2 restart pulsebook-backend --update-env
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
+        ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}

@@ -1,45 +1,59 @@
+#![recursion_limit = "256"]
+
 mod brain;
+mod coinglass;
 mod config;
 mod detail;
 mod execution;
 mod models;
+mod mtf_fvg;
 mod readiness;
 mod replay;
 mod scanner;
 mod state;
 mod stream;
+mod telegram;
 
-use axum::{response::Html, routing::get, Json, Router};
+use axum::{
+    extract::Json as ExtractJson,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
 use config::SETTINGS;
 use detail::build_symbol_detail;
 use serde_json::{json, Value};
 use socketioxide::extract::{AckSender, Data, SocketRef};
 use socketioxide::SocketIo;
 use state::STATE;
-use std::path::PathBuf;
 use std::time::Duration;
-use tower_http::services::ServeDir;
 
-fn assets_root() -> PathBuf {
-    // Shares the exact same dashboard as the Python backend.
-    for candidate in ["../backend", "backend", "."] {
-        let path = PathBuf::from(candidate);
-        if path.join("templates/index.html").exists() {
-            return path;
-        }
-    }
-    PathBuf::from("../backend")
+const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
+const DASHBOARD_CSS: &str = include_str!("../dashboard/app.css");
+const DASHBOARD_JS: &str = include_str!("../dashboard/app.js");
+
+async fn index() -> Html<&'static str> {
+    Html(DASHBOARD_HTML)
 }
 
-async fn index() -> Html<String> {
-    let template = tokio::fs::read_to_string(assets_root().join("templates/index.html"))
-        .await
-        .unwrap_or_else(|_| "<h1>dashboard template missing</h1>".to_string());
-    // Substitute the two Flask url_for expressions with static paths.
-    Html(
-        template
-            .replace("{{ url_for('static', filename='app.css') }}", "/static/app.css")
-            .replace("{{ url_for('static', filename='app.js') }}", "/static/app.js"),
+async fn dashboard_css() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/css; charset=utf-8"),
+        )],
+        DASHBOARD_CSS,
+    )
+}
+
+async fn dashboard_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/javascript; charset=utf-8"),
+        )],
+        DASHBOARD_JS,
     )
 }
 
@@ -55,6 +69,131 @@ async fn health() -> Json<Value> {
 
 async fn snapshot() -> Json<Value> {
     Json(STATE.lock().snapshot())
+}
+
+type AdminError = (StatusCode, Json<Value>);
+
+fn require_admin(headers: &HeaderMap) -> Result<(), AdminError> {
+    if !SETTINGS.admin_password_configured() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "ADMIN_PASSWORD is not configured"})),
+        ));
+    }
+    let password = headers
+        .get("x-admin-password")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !SETTINGS.admin_password_matches(password) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Invalid admin password"})),
+        ));
+    }
+    Ok(())
+}
+
+async fn settings_status() -> Json<Value> {
+    let state = STATE.lock();
+    Json(json!({
+        "mode": SETTINGS.trading_mode,
+        "strategy_mode": SETTINGS.strategy_mode,
+        "settings_profile": SETTINGS.settings_profile,
+        "source": state.source,
+        "active_symbols": state.books.len(),
+    }))
+}
+
+async fn admin_settings_get(headers: HeaderMap) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    Ok(Json(SETTINGS.public_settings()))
+}
+
+async fn admin_settings_put(
+    headers: HeaderMap,
+    ExtractJson(payload): ExtractJson<Value>,
+) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    SETTINGS
+        .save_admin_settings(&payload)
+        .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({"error": error}))))?;
+    Ok(Json(json!({
+        "ok": true,
+        "message": "Настройки сохранены. Перезапустите движок для применения.",
+    })))
+}
+
+async fn admin_restart(headers: HeaderMap) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        std::process::exit(0);
+    });
+    Ok(Json(
+        json!({"ok": true, "message": "Перезапуск запланирован"}),
+    ))
+}
+
+async fn admin_telegram_status(headers: HeaderMap) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    Ok(Json(json!({
+        "ok": true,
+        "enabled": telegram::is_enabled(),
+    })))
+}
+
+async fn admin_telegram_toggle(
+    headers: HeaderMap,
+    ExtractJson(payload): ExtractJson<Value>,
+) -> Result<Json<Value>, AdminError> {
+    require_admin(&headers)?;
+    let enabled = payload["enabled"].as_bool().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "enabled must be boolean"})),
+        )
+    })?;
+    telegram::set_enabled(enabled);
+    let status = if enabled {
+        "включены"
+    } else {
+        "отключены"
+    };
+    Ok(Json(json!({
+        "ok": true,
+        "enabled": enabled,
+        "message": format!("Telegram-уведомления {status}")
+    })))
+}
+
+async fn admin_diagnostics_export(headers: HeaderMap) -> Result<Response, AdminError> {
+    require_admin(&headers)?;
+    let payload = STATE.lock().snapshot();
+    let body = serde_json::to_vec_pretty(&json!({
+        "version": 1,
+        "generated_at": crate::models::now_ts(),
+        "snapshot": payload,
+    }))
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+    })?;
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename= pulsebook-diagnostics.json"),
+            ),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 fn normalize_symbol(payload: &Value) -> Option<String> {
@@ -143,7 +282,11 @@ async fn broadcast_loop(io: SocketIo) {
 async fn engine_loop() {
     let mut manager = stream::StreamManager::new();
     if SETTINGS.force_demo {
-        let symbols: Vec<String> = SETTINGS.demo_symbols.iter().map(|s| s.to_string()).collect();
+        let symbols: Vec<String> = SETTINGS
+            .demo_symbols
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         manager.set_symbols(symbols, true).await;
     }
     scanner::radar_loop(&mut manager).await;
@@ -153,6 +296,7 @@ async fn engine_loop() {
 async fn main() {
     tracing_subscriber::fmt().init();
     SETTINGS.assert_safe_mode();
+    telegram::start(&SETTINGS.trading_mode);
 
     let (socketio_layer, io) = SocketIo::new_layer();
     io.ns("/", on_connect);
@@ -163,13 +307,38 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/static/app.css", get(dashboard_css))
+        .route("/static/app.js", get(dashboard_js))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
-        .nest_service("/static", ServeDir::new(assets_root().join("static")))
+        .route(
+            "/api/coinglass/liquidation-heatmap",
+            get(coinglass::liquidation_heatmap),
+        )
+        .route("/api/settings/status", get(settings_status))
+        .route(
+            "/api/admin/settings",
+            get(admin_settings_get).put(admin_settings_put),
+        )
+        .route("/api/admin/restart", axum::routing::post(admin_restart))
+        .route("/api/admin/telegram/status", get(admin_telegram_status))
+        .route(
+            "/api/admin/telegram/toggle",
+            axum::routing::post(admin_telegram_toggle),
+        )
+        .route(
+            "/api/admin/diagnostics/export",
+            get(admin_diagnostics_export),
+        )
         .layer(socketio_layer);
 
     let address = format!("{}:{}", SETTINGS.host, SETTINGS.port);
-    println!("PulseBook (rust) listening on http://{address} · mode={} · LIVE TRADING LOCKED", SETTINGS.trading_mode);
-    let listener = tokio::net::TcpListener::bind(&address).await.expect("bind server port");
+    println!(
+        "PulseBook (rust) listening on http://{address} · mode={} · LIVE TRADING LOCKED",
+        SETTINGS.trading_mode
+    );
+    let listener = tokio::net::TcpListener::bind(&address)
+        .await
+        .expect("bind server port");
     axum::serve(listener, app).await.expect("server crashed");
 }

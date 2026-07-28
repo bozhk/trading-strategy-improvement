@@ -6,27 +6,40 @@ use std::collections::BTreeMap;
 
 fn serialize_levels(levels: &BTreeMap<OrderedFloat<f64>, f64>, reverse: bool) -> Vec<Value> {
     let rows: Vec<(f64, f64)> = if reverse {
-        levels.iter().rev().take(50).map(|(p, q)| (p.0, *q)).collect()
+        levels
+            .iter()
+            .rev()
+            .take(50)
+            .map(|(p, q)| (p.0, *q))
+            .collect()
     } else {
         levels.iter().take(50).map(|(p, q)| (p.0, *q)).collect()
     };
     rows.into_iter()
-        .map(|(price, size)| json!({
-            "price": price, "size": size, "notional": price * size,
-        }))
+        .map(|(price, size)| {
+            json!({
+                "price": price, "size": size, "notional": price * size,
+            })
+        })
         .collect()
 }
 
 fn symbol_walls(state: &MarketState, symbol: &str, now: f64) -> Vec<Value> {
     let mut walls = Vec::new();
     for side in ["bid", "ask"] {
-        let Some(wall) = state.wall_tracks.get(&(symbol.to_string(), side)) else { continue };
+        let Some(wall) = state.wall_tracks.get(&(symbol.to_string(), side)) else {
+            continue;
+        };
         let age_seconds = (now - wall.started_at).max(0.0);
         let current_size = state
             .books
             .get(symbol)
             .and_then(|book| {
-                let levels = if side == "bid" { &book.bids } else { &book.asks };
+                let levels = if side == "bid" {
+                    &book.bids
+                } else {
+                    &book.asks
+                };
                 levels.get(&OrderedFloat(wall.price)).copied()
             })
             .unwrap_or(0.0);
@@ -48,32 +61,55 @@ fn symbol_walls(state: &MarketState, symbol: &str, now: f64) -> Vec<Value> {
 fn symbol_history(state: &MarketState, symbol: &str) -> Vec<Value> {
     let mut history: Vec<(f64, Value)> = Vec::new();
     for trade in state.closed.iter().filter(|t| t.symbol == symbol) {
-        history.push((trade.closed_at, json!({
-            "kind": "TRADE", "timestamp": trade.closed_at, "side": trade.side,
-            "message": trade.reason, "pnl": trade.pnl,
-            "entry": trade.entry, "exit": trade.exit,
-        })));
+        history.push((
+            trade.closed_at,
+            json!({
+                "kind": "TRADE", "timestamp": trade.closed_at, "side": trade.side,
+                "message": trade.reason, "pnl": trade.pnl,
+                "entry": trade.entry, "exit": trade.exit,
+            }),
+        ));
     }
     for event in state.logs.iter().filter(|e| e.symbol == symbol) {
-        history.push((event.timestamp, json!({
-            "kind": "LOG", "timestamp": event.timestamp,
-            "level": event.level, "message": event.message,
-        })));
+        history.push((
+            event.timestamp,
+            json!({
+                "kind": "LOG", "timestamp": event.timestamp,
+                "level": event.level, "message": event.message,
+            }),
+        ));
     }
     history.sort_by(|a, b| b.0.total_cmp(&a.0));
-    history.into_iter().take(5).map(|(_, value)| value).collect()
+    history
+        .into_iter()
+        .take(5)
+        .map(|(_, value)| value)
+        .collect()
 }
 
 pub fn build_symbol_detail(state: &MarketState, symbol: &str) -> Option<Value> {
     let now = now_ts();
     let book = state.books.get(symbol)?;
     let (bid, ask) = book.quote();
-    let spread_pct = if bid > 0.0 && ask > 0.0 { (ask - bid) / bid * 100.0 } else { 0.0 };
-    let metrics = state.metrics.get(symbol).cloned().unwrap_or_else(|| json!({}));
+    let spread_pct = if bid > 0.0 && ask > 0.0 {
+        (ask - bid) / bid * 100.0
+    } else {
+        0.0
+    };
+    let metrics = state
+        .metrics
+        .get(symbol)
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     let f = |key: &str, default: f64| metrics[key].as_f64().unwrap_or(default);
     let buy_accelerating = metrics["buy_accelerating"].as_bool().unwrap_or(false);
     let sell_accelerating = metrics["sell_accelerating"].as_bool().unwrap_or(false);
+    let mtf_fvg = state
+        .mtf_fvg
+        .get(symbol)
+        .map(|tracker| tracker.snapshot())
+        .unwrap_or(Value::Null);
 
     Some(json!({
         "symbol": symbol,
@@ -104,6 +140,7 @@ pub fn build_symbol_detail(state: &MarketState, symbol: &str) -> Option<Value> {
             "sell_dominance": f("sell_dominance", 0.5),
             "flow": f("flow", 0.5),
             "imbalance": f("imbalance", 0.5),
+            "mtf_fvg": mtf_fvg,
         },
         "history": symbol_history(state, symbol),
     }))

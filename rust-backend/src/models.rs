@@ -11,23 +11,31 @@ pub fn now_ts() -> f64 {
         .unwrap_or(0.0)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum Side {
-    LONG,
-    SHORT,
+    Long,
+    Short,
 }
 
 impl Side {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Side::LONG => "LONG",
-            Side::SHORT => "SHORT",
+            Side::Long => "LONG",
+            Side::Short => "SHORT",
         }
     }
     pub fn direction(&self) -> f64 {
         match self {
-            Side::LONG => 1.0,
-            Side::SHORT => -1.0,
+            Side::Long => 1.0,
+            Side::Short => -1.0,
+        }
+    }
+
+    pub fn inverted(&self) -> Self {
+        match self {
+            Side::Long => Side::Short,
+            Side::Short => Side::Long,
         }
     }
 }
@@ -49,7 +57,18 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
-    pub fn apply(&mut self, kind: &str, bids: &[(f64, f64)], asks: &[(f64, f64)], sequence: i64) {
+    pub fn apply(
+        &mut self,
+        kind: &str,
+        bids: &[(f64, f64)],
+        asks: &[(f64, f64)],
+        sequence: i64,
+    ) -> bool {
+        // A snapshot starts a new sequence. Deltas at or behind the current
+        // sequence are stale and must not refresh or mutate the live book.
+        if kind != "snapshot" && sequence <= self.sequence {
+            return false;
+        }
         if kind == "snapshot" {
             self.bids.clear();
             self.asks.clear();
@@ -72,8 +91,9 @@ impl OrderBook {
             let highest = *self.asks.keys().next_back().unwrap();
             self.asks.remove(&highest);
         }
-        self.sequence = self.sequence.max(sequence);
+        self.sequence = sequence;
         self.updated_at = now_ts();
+        true
     }
 
     /// Best bid / best ask (0.0 when empty, mirroring the Python engine).
@@ -81,6 +101,30 @@ impl OrderBook {
         let bid = self.bids.keys().next_back().map(|p| p.0).unwrap_or(0.0);
         let ask = self.asks.keys().next().map(|p| p.0).unwrap_or(0.0);
         (bid, ask)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_delta_does_not_mutate_the_book() {
+        let mut book = OrderBook::default();
+        assert!(book.apply("snapshot", &[(100.0, 2.0)], &[(101.0, 3.0)], 10));
+        assert!(!book.apply("delta", &[(100.0, 9.0)], &[], 9));
+        assert_eq!(book.bids.get(&OrderedFloat(100.0)), Some(&2.0));
+        assert_eq!(book.sequence, 10);
+    }
+
+    #[test]
+    fn snapshot_can_start_a_new_sequence() {
+        let mut book = OrderBook::default();
+        assert!(book.apply("snapshot", &[(100.0, 2.0)], &[], 10));
+        assert!(book.apply("snapshot", &[(99.0, 4.0)], &[], 1));
+        assert!(!book.bids.contains_key(&OrderedFloat(100.0)));
+        assert_eq!(book.bids.get(&OrderedFloat(99.0)), Some(&4.0));
+        assert_eq!(book.sequence, 1);
     }
 }
 
@@ -113,6 +157,7 @@ pub struct Position {
     pub mfe: f64,
     pub mae: f64,
     pub reversal_streak: u32,
+    pub reversal_started_at: f64,
     pub last_status_log: f64,
 }
 

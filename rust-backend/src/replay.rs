@@ -20,15 +20,24 @@ pub struct ReplayEngine<F: FnMut(&ReplayEvent)> {
     pub data_quality_errors: u64,
 }
 
+pub type WalkForwardFold = (Vec<ReplayEvent>, Vec<ReplayEvent>);
+
 impl<F: FnMut(&ReplayEvent)> ReplayEngine<F> {
     pub fn new(handler: F) -> Self {
-        Self { handler, now: 0.0, last_sequence: HashMap::new(), data_quality_errors: 0 }
+        Self {
+            handler,
+            now: 0.0,
+            last_sequence: HashMap::new(),
+            data_quality_errors: 0,
+        }
     }
 
     pub fn run(&mut self, events: Vec<ReplayEvent>) {
         let mut ordered = events;
         ordered.sort_by(|a, b| {
-            a.timestamp.total_cmp(&b.timestamp).then(a.sequence.cmp(&b.sequence))
+            a.timestamp
+                .total_cmp(&b.timestamp)
+                .then(a.sequence.cmp(&b.sequence))
         });
         for event in &ordered {
             // Event time is advanced before dispatch: the handler can only
@@ -39,19 +48,21 @@ impl<F: FnMut(&ReplayEvent)> ReplayEngine<F> {
                 continue;
             }
             self.now = event.timestamp;
-            self.last_sequence.insert(event.symbol.clone(), event.sequence);
+            self.last_sequence
+                .insert(event.symbol.clone(), event.sequence);
             (self.handler)(event);
         }
     }
 }
 
 /// Yields expanding train windows and untouched chronological test folds.
-pub fn walk_forward(
-    events: &[ReplayEvent],
-    folds: usize,
-) -> Result<Vec<(Vec<ReplayEvent>, Vec<ReplayEvent>)>, String> {
+pub fn walk_forward(events: &[ReplayEvent], folds: usize) -> Result<Vec<WalkForwardFold>, String> {
     let mut rows: Vec<ReplayEvent> = events.to_vec();
-    rows.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp).then(a.sequence.cmp(&b.sequence)));
+    rows.sort_by(|a, b| {
+        a.timestamp
+            .total_cmp(&b.timestamp)
+            .then(a.sequence.cmp(&b.sequence))
+    });
     if folds < 2 || rows.len() < folds {
         return Err("walk-forward requires at least two non-empty folds".into());
     }
@@ -59,8 +70,15 @@ pub fn walk_forward(
     let mut result = Vec::new();
     for index in 1..folds {
         let train_end = size * index;
-        let test_end = if index == folds - 1 { rows.len() } else { size * (index + 1) };
-        result.push((rows[..train_end].to_vec(), rows[train_end..test_end].to_vec()));
+        let test_end = if index == folds - 1 {
+            rows.len()
+        } else {
+            size * (index + 1)
+        };
+        result.push((
+            rows[..train_end].to_vec(),
+            rows[train_end..test_end].to_vec(),
+        ));
     }
     Ok(result)
 }
@@ -85,7 +103,11 @@ mod tests {
         let mut seen = Vec::new();
         {
             let mut engine = ReplayEngine::new(|e: &ReplayEvent| seen.push(e.timestamp));
-            engine.run(vec![event(3.0, 3, "A"), event(1.0, 1, "A"), event(2.0, 2, "A")]);
+            engine.run(vec![
+                event(3.0, 3, "A"),
+                event(1.0, 1, "A"),
+                event(2.0, 2, "A"),
+            ]);
             assert_eq!(engine.data_quality_errors, 0);
         }
         assert_eq!(seen, vec![1.0, 2.0, 3.0]);
@@ -95,21 +117,27 @@ mod tests {
     fn stale_sequences_count_as_data_quality_errors() {
         let mut count = 0;
         let mut engine = ReplayEngine::new(|_| count += 1);
-        engine.run(vec![event(1.0, 5, "A"), event(2.0, 4, "A"), event(3.0, 6, "A")]);
+        engine.run(vec![
+            event(1.0, 5, "A"),
+            event(2.0, 4, "A"),
+            event(3.0, 6, "A"),
+        ]);
         assert_eq!(engine.data_quality_errors, 1);
         assert_eq!(count, 2);
     }
 
     #[test]
     fn walk_forward_folds_never_overlap() {
-        let events: Vec<ReplayEvent> =
-            (0..40).map(|i| event(i as f64, i as i64, "A")).collect();
+        let events: Vec<ReplayEvent> = (0..40).map(|i| event(i as f64, i as i64, "A")).collect();
         let folds = walk_forward(&events, 4).unwrap();
         assert_eq!(folds.len(), 3);
         for (train, test) in &folds {
             let train_max = train.iter().map(|e| e.timestamp).fold(f64::MIN, f64::max);
             let test_min = test.iter().map(|e| e.timestamp).fold(f64::MAX, f64::min);
-            assert!(train_max < test_min, "test folds must be strictly after training data");
+            assert!(
+                train_max < test_min,
+                "test folds must be strictly after training data"
+            );
         }
     }
 
